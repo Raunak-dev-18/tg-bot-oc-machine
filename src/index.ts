@@ -13,7 +13,7 @@ import { PendingQuestions, parseAskBlocks, parseReactLine, parseSendBlocks, stri
 import { loadMemoryContext, memoryPaths, readMemoryFile, rememberFact } from "./memory.js";
 import { getVerboseModels, listPlainModels, listSessions, lookupModel, recallSessions } from "./models.js";
 import { loadSkills, skillsCatalog } from "./skills.js";
-import { runOpencode } from "./opencode.js";
+import { runOpencode, CancelledError, type RunCancel } from "./opencode.js";
 import { ensureServe, isServeHealthy } from "./serve.js";
 import { Store } from "./store.js";
 import {
@@ -39,6 +39,7 @@ const HELP_TEXT = [
   "Commands:",
   "/start — welcome + status",
   "/help — this help",
+  "/stop — cancel the currently running task",
   "/status — bot + opencode health",
   "/new or /reset — forget conversation, start fresh session",
   "/free — list FREE models (👁 = sees images), then reply with the number",
@@ -165,6 +166,44 @@ async function main(): Promise<void> {
 
   const startedAt = Date.now();
   const busyChats = new Set<number>();
+  /** In-flight opencode runs per chat (for /stop cancellation). */
+  const running = new Map<number, RunCancel[]>();
+
+  function trackRun(chatId: number): RunCancel {
+    const ctrl: RunCancel = { killed: false };
+    const list = running.get(chatId) ?? [];
+    list.push(ctrl);
+    running.set(chatId, list);
+    return ctrl;
+  }
+
+  function untrackRun(chatId: number, ctrl: RunCancel): void {
+    const list = (running.get(chatId) ?? []).filter((c) => c !== ctrl);
+    if (list.length > 0) running.set(chatId, list);
+    else running.delete(chatId);
+  }
+
+  function stopChat(chatId: number): boolean {
+    const list = running.get(chatId) ?? [];
+    if (list.length === 0) return false;
+    running.delete(chatId);
+    for (const ctrl of list) {
+      ctrl.killed = true;
+      try {
+        ctrl.proc?.kill("SIGTERM");
+      } catch {
+        /* already exited */
+      }
+      setTimeout(() => {
+        try {
+          ctrl.proc?.kill("SIGKILL");
+        } catch {
+          /* already exited */
+        }
+      }, 3000).unref?.();
+    }
+    return true;
+  }
   let stopped = false;
   const shutdown = () => {
     if (stopped) return;
@@ -271,6 +310,7 @@ async function main(): Promise<void> {
     const progressTimer = { lastNote: 0 };
     const outboxBefore = new Set<string>(await readdir(config.outboxDir).catch(() => [] as string[]));
     await refreshServe();
+    const ctrl = trackRun(chatId);
     try {
       await api.sendChatAction(chatId, "typing");
       const t0 = Date.now();
@@ -297,6 +337,7 @@ async function main(): Promise<void> {
         skills: skillsText,
         memoryDir: memPaths.dir,
         memory: isNewSession ? await loadMemoryContext(config.dataDir) : undefined,
+        cancel: ctrl,
         onProgress: (note) => {
           const now = Date.now();
           if (now - progressTimer.lastNote > 20_000) {
@@ -337,16 +378,26 @@ async function main(): Promise<void> {
       if (questions.length > 0 && !body) await api.sendMessage(chatId, footer.trim());
       if (reactTo !== undefined) await api.react(chatId, reactTo, reacted.emoji ?? "👍");
     } catch (err) {
-      console.error(`[opencode] chat ${chatId}: FAILED ${(err as Error).message.slice(0, 300)}`);
-      if (reactTo !== undefined) await api.react(chatId, reactTo, "👎");
-      try {
-        await sendReply(chatId, `❌ ${(err as Error).message.slice(0, 3000)}`, replyTo);
-      } catch {
-        /* chat may be gone; already logged */
+      if (err instanceof CancelledError) {
+        console.log(`[opencode] chat ${chatId}: stopped by operator`);
+        try {
+          await sendReply(chatId, "⏹️ Stopped.", replyTo);
+        } catch {
+          /* chat may be gone; already logged */
+        }
+      } else {
+        console.error(`[opencode] chat ${chatId}: FAILED ${(err as Error).message.slice(0, 300)}`);
+        if (reactTo !== undefined) await api.react(chatId, reactTo, "👎");
+        try {
+          await sendReply(chatId, `❌ ${(err as Error).message.slice(0, 3000)}`, replyTo);
+        } catch {
+          /* chat may be gone; already logged */
+        }
       }
     } finally {
       clearInterval(typingTimer);
       busyChats.delete(chatId);
+      untrackRun(chatId, ctrl);
     }
   }
 
@@ -408,6 +459,15 @@ async function main(): Promise<void> {
     if (cmd === "/new" || cmd === "/reset") {
       store.clearChat(chatKey);
       await api.sendMessage(chatId, "🔄 Session cleared. Next message starts a fresh opencode session.", replyTo);
+      return;
+    }
+
+    if (cmd === "/stop") {
+      if (stopChat(chatId)) {
+        await api.sendMessage(chatId, "⏹️ Stopping the running task…", replyTo);
+      } else {
+        await api.sendMessage(chatId, "Nothing running right now.", replyTo);
+      }
       return;
     }
 
@@ -741,8 +801,9 @@ async function main(): Promise<void> {
         const memPaths = memoryPaths(config.dataDir);
         const outboxBefore = new Set<string>(await readdir(config.outboxDir).catch(() => [] as string[]));
         const results = await Promise.all(
-          tasks.map((task, i) =>
-            runOpencode({
+          tasks.map((task, i) => {
+            const ctrl = trackRun(chatId);
+            return runOpencode({
               prompt: `[Parallel task ${i + 1}/${tasks.length}: ${task}]\n${task}`,
               sessionId: undefined,
               isNewSession: true,
@@ -759,17 +820,18 @@ async function main(): Promise<void> {
               memoryDir: memPaths.dir,
               memory: mem,
               skills: skillsText,
+              cancel: ctrl,
             }).then(
               (result) => ({ ok: true as const, i, task, result }),
-              (err: unknown) => ({ ok: false as const, i, task, error: (err as Error).message }),
-            ),
-          ),
+              (err: unknown) => ({ ok: false as const, i, task, error: (err as Error).message, cancelled: (err as Error).name === "CancelledError" }),
+            ).finally(() => untrackRun(chatId, ctrl));
+          }),
         );
         const sentPaths = new Set<string>();
         let lastEmoji: string | undefined;
         for (const r of results) {
           if (!r.ok) {
-            await api.sendMessage(chatId, `🔀 Task ${r.i + 1}/${tasks.length}: ${r.task}\n❌ ${r.error.slice(0, 1000)}`);
+            await api.sendMessage(chatId, `🔀 Task ${r.i + 1}/${tasks.length}: ${r.task}\n${r.cancelled ? "⏹️ Stopped." : `❌ ${r.error.slice(0, 1000)}`}`);
             continue;
           }
           const reacted = parseReactLine(r.result.text);

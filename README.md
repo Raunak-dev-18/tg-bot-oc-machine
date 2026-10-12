@@ -22,7 +22,7 @@ Full instructions: **[usage.md](./usage.md)**.
 - ⏰ **Scheduled tasks** — `/cron every 30m …`, `/crons`, `/uncron`
 - 🛠️ **Skills** — drop-in `SKILL.md` guides (`/skills`); **recall** past sessions (`/recall`); **parallel** runs (`/parallel a ;; b`)
 - 📤 **Direct sends** — `/send <path>` pushes any machine file to chat instantly
-- 🔧 **Direct shell** — `/exec <command>` runs without AI; `/agent`, `/status`, `/new`, `/reset`
+- 🔧 **Direct shell** — `/exec <command>` runs without AI; `/agent`, `/status`, `/new`, `/reset`, `/stop` (cancel running task)
 - 🖥️ **Background server** — auto-starts and reuses `opencode serve` (`--attach` mode)
 
 ## Quickstart

@@ -83,6 +83,7 @@ e.g. ✅/❌ are rejected by the API, and anything invalid is skipped silently.)
 | Command | What it does |
 |---|---|
 | `/start`, `/help` | Welcome + this feature overview |
+| `/stop` | Cancel the currently running task (kills the agent run, replies ⏹️) |
 | `/status` | Bot uptime, workdir, server health, browser MCP, session, model, memory size, cron count |
 | `/new`, `/reset` | Forget the conversation; next message starts a fresh session (with memory loaded) |
 | `/free` | Numbered list of **free** models (`👁` = sees images, plus context sizes). Reply with the **number** to select |

@@ -1,7 +1,7 @@
 // Bridge between Telegram messages and opencode (`opencode run --format json`).
 // Each Telegram chat maps to a persistent opencode session id so the agent
 // keeps memory across messages. New chats start with an ops system prompt.
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 
 export interface RunOpts {
   prompt: string;
@@ -28,6 +28,8 @@ export interface RunOpts {
   agentVenv?: string;
   /** Skill catalog text (told to the agent in fresh sessions). */
   skills?: string;
+  /** Cancellation token — abort the spawned process via /stop. */
+  cancel?: RunCancel;
   onProgress?: (note: string) => void;
 }
 
@@ -37,6 +39,20 @@ export interface RunResult {
   tokens?: { input: number; output: number };
   cost?: number;
   durationMs: number;
+}
+
+/** Cancellation token: set `killed = true` + SIGTERM `proc` to abort a run. */
+export interface RunCancel {
+  killed: boolean;
+  proc?: ChildProcess;
+}
+
+export class CancelledError extends Error {
+  readonly cancelled = true;
+  constructor() {
+    super("cancelled by operator");
+    this.name = "CancelledError";
+  }
 }
 
 const OPS_SYSTEM_PREFIX = [
@@ -166,6 +182,7 @@ export function runOpencode(opts: RunOpts): Promise<RunResult> {
 
   return new Promise<RunResult>((resolve, reject) => {
     const child = spawn(opts.bin, args, { cwd: opts.cwd, stdio: ["ignore", "pipe", "pipe"] });
+    if (opts.cancel) opts.cancel.proc = child;
     let stdoutBuffer = "";
     let stderrTail = "";
     const texts: string[] = [];
@@ -232,6 +249,10 @@ export function runOpencode(opts: RunOpts): Promise<RunResult> {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (opts.cancel?.killed) {
+        reject(new CancelledError());
+        return;
+      }
       if (stdoutBuffer.trim()) handleLine(stdoutBuffer.trim());
       const text = texts.join("").trim();
       if (code === 0) {

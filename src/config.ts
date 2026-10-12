@@ -7,7 +7,9 @@ export interface BotConfig {
   allowedUsers: Set<number>;
   workDir: string;
   dataDir: string;
+  outboxDir: string;
   opencodeBin: string;
+  opencodeConfigHome: string;
   model: string | undefined;
   agent: string;
   autoApprove: boolean;
@@ -43,6 +45,10 @@ export function loadConfig(): BotConfig {
   const workspaceRoot = path.resolve(process.cwd(), "..", "..");
   const workDir = path.resolve(process.env.WORK_DIR ?? workspaceRoot);
   const dataDir = path.resolve(process.env.DATA_DIR ?? path.join(process.cwd(), "data"));
+  const outboxDir = path.resolve(process.env.OUTBOX_DIR ?? path.join(dataDir, "outbox"));
+  const opencodeConfigHome = path.resolve(
+    process.env.OPENCODE_CONFIG_HOME ?? path.join(dataDir, ".opencode-home"),
+  );
 
   const serverUrlRaw = (process.env.OPENCODE_SERVER_URL ?? "").trim();
 
@@ -51,6 +57,8 @@ export function loadConfig(): BotConfig {
     allowedUsers: parseAllowedUsers(process.env.TELEGRAM_ALLOWED_USERS),
     workDir,
     dataDir,
+    outboxDir,
+    opencodeConfigHome,
     opencodeBin: process.env.OPENCODE_BIN ?? "opencode",
     model: (process.env.OPENCODE_MODEL ?? "").trim() || undefined,
     agent: (process.env.OPENCODE_AGENT ?? "build").trim() || "build",

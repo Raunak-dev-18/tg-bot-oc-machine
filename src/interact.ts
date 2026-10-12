@@ -42,6 +42,45 @@ export function stripAskBlocks(text: string): string {
   return text.replace(ASK_RE, "").replace(/\n{3,}/g, "\n\n").trim();
 }
 
+export interface SendFile {
+  filePath: string;
+  caption: string;
+}
+
+const SEND_RE = /:::SEND\s*\n([\s\S]*?)\n:::/g;
+
+/**
+ * Explicit media sends. The agent emits:
+ *   :::SEND
+ *   /absolute/path/to/file.png | optional caption
+ *   /absolute/path/to/report.pdf
+ *   :::
+ * One file per line; caption after `|` is optional.
+ */
+export function parseSendBlocks(text: string): SendFile[] {
+  const files: SendFile[] = [];
+  SEND_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = SEND_RE.exec(text)) !== null && files.length < 5) {
+    for (const rawLine of match[1].split("\n")) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#")) continue;
+      const [p, ...captionParts] = line.split("|");
+      const filePath = p.trim();
+      if (!filePath.startsWith("/")) continue;
+      files.push({ filePath, caption: captionParts.join("|").trim().slice(0, 200) });
+      if (files.length >= 5) break;
+    }
+  }
+  return files;
+}
+
+/** Remove SEND blocks from the text shown in chat (they're delivered as media). */
+export function stripSendBlocks(text: string): string {
+  SEND_RE.lastIndex = 0;
+  return text.replace(SEND_RE, "").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 export interface PendingAnswer {
   chatId: number;
   sessionId?: string;

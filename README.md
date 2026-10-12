@@ -5,16 +5,20 @@ Every chat message is forwarded to `opencode run` in your working directory;
 the agent's reply comes back as the chat reply — and it can actually act:
 run shell, manage files, clone repos, deploy/start/stop apps, read logs.
 
-Zero runtime dependencies — only Node.js 18+ built-ins. TypeScript source,
-bundled to a single file with esbuild.
+Zero runtime dependencies (plus `@playwright/mcp` for browser automation).
+TypeScript source, bundled to a single file with esbuild.
+Full instructions: **[usage.md](./usage.md)**.
 
 ## Features
 
 - 💬 **Chat → opencode → chat** with per-chat persistent sessions (memory across messages)
 - ❓ **Agent questions as buttons** — the agent emits `:::ASK` blocks, you tap inline-keyboard options, your answer flows back into the same session
-- 📷📎 **Photos & documents** — downloaded and handed to the agent (vision models can see images)
-- 🆓 **Free-model browser** — `/free` lists free models with vision (👁) markers; `/model <number|id>` switches
-- 📚 **Session browser** — `/sessions` lists recent opencode runs; `/switch <number|id>` continues one
+- 📷📎 **Photos & documents both ways** — uploads go to the agent; agent files (screenshots, reports) come back via outbox + `:::SEND` blocks
+- 🧠 **Persistent memory** — `MEMORY.md` + daily notes, agent-maintained (`/memory`, `/remember`)
+- 🌐 **Browser automation** — headless Chromium via Playwright MCP, `/shot <url>` screenshots
+- 🆓 **Free-model browser** — `/free` lists free models with vision (👁) markers; reply with the number to switch
+- 📚 **Session browser** — `/sessions` lists recent runs; reply with the number to jump
+- ⏰ **Scheduled tasks** — `/cron every 30m …`, `/crons`, `/uncron`
 - 🔧 **Direct shell** — `/exec <command>` runs without AI; `/agent`, `/status`, `/new`, `/reset`
 - 🖥️ **Background server** — auto-starts and reuses `opencode serve` (`--attach` mode)
 

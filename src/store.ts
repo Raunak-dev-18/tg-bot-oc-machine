@@ -11,17 +11,31 @@ export interface ChatState {
   modelList?: string[];
   /** Last /sessions listing, so /switch <number> can select from it. */
   sessionList?: { id: string; title: string }[];
+  /** Fresh list selection awaiting a bare-number reply ("2" picks option 2). */
+  pendingSelect?: { kind: "model" | "session"; options: string[]; expiresAt: number };
   updatedAt: string;
+}
+
+export interface CronJob {
+  id: string;
+  chatId: number;
+  spec: string;
+  task: string;
+  nextRun: number;
+  createdAt: string;
+  lastRun?: string;
+  failures: number;
 }
 
 interface StoreData {
   offset?: number;
   chats: Record<string, ChatState>;
+  crons: CronJob[];
 }
 
 export class Store {
   private file: string;
-  private data: StoreData = { chats: {} };
+  private data: StoreData = { chats: {}, crons: [] };
   private saveTimer: NodeJS.Timeout | undefined;
 
   constructor(dataDir: string) {
@@ -33,7 +47,9 @@ export class Store {
     try {
       const raw = await readFile(this.file, "utf8");
       const parsed = JSON.parse(raw) as StoreData;
-      if (parsed && typeof parsed === "object" && parsed.chats) this.data = parsed;
+      if (parsed && typeof parsed === "object" && parsed.chats) {
+        this.data = { offset: parsed.offset, chats: parsed.chats, crons: parsed.crons ?? [] };
+      }
     } catch {
       // First run — start empty.
     }
@@ -83,5 +99,32 @@ export class Store {
   clearChat(key: string): void {
     delete this.data.chats[key];
     this.scheduleSave();
+  }
+
+  getCrons(): CronJob[] {
+    return this.data.crons;
+  }
+
+  addCron(job: CronJob): void {
+    this.data.crons.push(job);
+    this.scheduleSave();
+  }
+
+  updateCron(id: string, patch: Partial<CronJob>): void {
+    const job = this.data.crons.find((j) => j.id === id);
+    if (job) {
+      Object.assign(job, patch);
+      this.scheduleSave();
+    }
+  }
+
+  removeCron(id: string): boolean {
+    const before = this.data.crons.length;
+    this.data.crons = this.data.crons.filter((j) => j.id !== id);
+    if (this.data.crons.length !== before) {
+      this.scheduleSave();
+      return true;
+    }
+    return false;
   }
 }

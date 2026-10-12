@@ -2,9 +2,14 @@
 // Text messages go to opencode; photos/documents are downloaded and attached
 // via `opencode run -f`; agent questions (:::ASK blocks) render as buttons.
 import { execFile } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { mkdir, readdir, stat } from "node:fs/promises";
 import path from "node:path";
+import { ensureBotConfigHome } from "./botconfig.js";
+import { computeNext, describeSpec, formatNext, parseSpec } from "./cron.js";
 import { loadConfig } from "./config.js";
-import { PendingQuestions, parseAskBlocks, stripAskBlocks } from "./interact.js";
+import { PendingQuestions, parseAskBlocks, parseSendBlocks, stripAskBlocks, stripSendBlocks } from "./interact.js";
+import { loadMemoryContext, memoryPaths, readMemoryFile, rememberFact } from "./memory.js";
 import { getVerboseModels, listPlainModels, listSessions, lookupModel } from "./models.js";
 import { runOpencode } from "./opencode.js";
 import { ensureServe, isServeHealthy } from "./serve.js";
@@ -23,6 +28,9 @@ const HELP_TEXT = [
   "Send any message — it goes to opencode on this machine, which can",
   "deploy/run apps, clone repos, edit files, run shell, etc.",
   "Send 📷 photos or 📎 files too — the agent can see/read them.",
+  "Ask it to browse the web like a human, or to create/edit/delete files,",
+  "install things, run and deploy apps. Files it produces (screenshots,",
+  "reports) are delivered back here automatically.",
   "When the agent needs a decision, you'll get tappable option buttons.",
   "",
   "Commands:",
@@ -30,12 +38,18 @@ const HELP_TEXT = [
   "/help — this help",
   "/status — bot + opencode health",
   "/new or /reset — forget conversation, start fresh session",
-  "/free — list FREE models (👁 = sees images), then /model <number>",
-  "/models [provider] — list models, then /model <number>",
+  "/free — list FREE models (👁 = sees images), then reply with the number",
+  "/models [provider] — list models, then reply with the number",
   "/model <number|provider/model> — switch model for this chat",
   "/model — show current model",
-  "/sessions — list recent opencode sessions, then /switch <number>",
+  "/sessions — list recent opencode sessions, then reply with the number",
   "/switch <number|session-id> — continue a different session",
+  "/memory — show what the agent remembers about you",
+  "/remember <fact> — save something to long-term memory",
+  "/shot <url> [note] — open a page in the agent browser, screenshot to chat",
+  "/cron <every 30m|every 2h|daily 09:30> <task> — run a task on schedule",
+  "/crons — list scheduled tasks",
+  "/uncron <number|id> — delete a scheduled task",
   "/agent <name> — switch opencode agent (default: build)",
   "/exec <shell command> — run shell directly, no AI",
 ].join("\n");
@@ -62,7 +76,19 @@ async function main(): Promise<void> {
   const store = new Store(config.dataDir);
   await store.load();
   const inboxDir = path.join(config.dataDir, "inbox");
+  await mkdir(inboxDir, { recursive: true });
+  await mkdir(config.outboxDir, { recursive: true });
+  await mkdir(memoryPaths(config.dataDir).dir, { recursive: true });
   const pending = new PendingQuestions();
+
+  // Isolated opencode config (browser MCP etc.) — applies to serve + runs below.
+  const botHome = await ensureBotConfigHome({
+    configHome: config.opencodeConfigHome,
+    workDir: config.workDir,
+    dataDir: config.dataDir,
+  });
+  process.env.XDG_CONFIG_HOME = botHome.dir;
+  console.log(`[bot] opencode config home: ${botHome.dir}`);
 
   if (config.allowedUsers.size === 0) {
     console.warn(
@@ -104,6 +130,65 @@ async function main(): Promise<void> {
     return config.allowedUsers.size === 0 || (fromId !== undefined && config.allowedUsers.has(fromId));
   }
 
+  /** Files the agent dropped into the outbox during this run. */
+  async function collectOutbox(before: Set<string>): Promise<string[]> {
+    try {
+      const entries = await readdir(config.outboxDir);
+      return entries.filter((e) => !before.has(e)).sort();
+    } catch {
+      return [];
+    }
+  }
+
+  async function deliverOutbox(chatId: number, fresh: string[], skip?: Set<string>): Promise<void> {
+    const MAX_FILES = 5;
+    const MAX_BYTES = 20 * 1024 * 1024;
+    let sent = 0;
+    for (const name of fresh) {
+      const full = path.resolve(config.outboxDir, name);
+      if (skip?.has(full)) continue;
+      if (sent >= MAX_FILES) {
+        await api.sendMessage(chatId, `…and more file(s) left in the outbox.`);
+        break;
+      }
+      try {
+        const info = await stat(full);
+        if (!info.isFile()) continue;
+        if (info.size > MAX_BYTES) {
+          await api.sendMessage(chatId, `📎 ${name} (${Math.round(info.size / 1048576)}MB) is too large to send via Telegram.`);
+          continue;
+        }
+        const isImage = /\.(jpe?g|png|gif|webp)$/i.test(name);
+        if (isImage) await api.sendPhoto(chatId, full, `📷 ${name}`);
+        else await api.sendDocument(chatId, full, `📎 ${name}`);
+        sent++;
+      } catch (err) {
+        console.error(`[outbox] failed to send ${name}: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  /** Explicit :::SEND blocks from the agent → photo/document messages. Returns resolved paths sent. */
+  async function deliverSendFiles(chatId: number, sends: { filePath: string; caption: string }[]): Promise<Set<string>> {
+    const delivered = new Set<string>();
+    const MAX_BYTES = 20 * 1024 * 1024;
+    for (const send of sends) {
+      const full = path.resolve(send.filePath);
+      try {
+        const info = await stat(full);
+        if (!info.isFile() || info.size > MAX_BYTES) continue;
+        const name = path.basename(full);
+        const caption = send.caption || `📎 ${name}`;
+        if (/\.(jpe?g|png|gif|webp)$/i.test(name)) await api.sendPhoto(chatId, full, caption);
+        else await api.sendDocument(chatId, full, caption);
+        delivered.add(full);
+      } catch (err) {
+        console.error(`[send] failed for ${send.filePath}: ${(err as Error).message}`);
+      }
+    }
+    return delivered;
+  }
+
   /** Shared pipeline: prompt (+optional files) → opencode → reply + ASK buttons. */
   async function forwardToOpencode(chatId: number, replyTo: number | undefined, prompt: string, files?: string[]): Promise<void> {
     if (busyChats.has(chatId)) {
@@ -113,15 +198,18 @@ async function main(): Promise<void> {
     busyChats.add(chatId);
     const typingTimer = setInterval(() => void api.sendChatAction(chatId, "typing"), 4000);
     const progressTimer = { lastNote: 0 };
+    const outboxBefore = new Set<string>(await readdir(config.outboxDir).catch(() => [] as string[]));
     try {
       await api.sendChatAction(chatId, "typing");
       const t0 = Date.now();
       const chatKey = String(chatId);
       const state = store.getChat(chatKey);
+      const isNewSession = !state.sessionId;
+      const memPaths = memoryPaths(config.dataDir);
       const result = await runOpencode({
         prompt,
         sessionId: state.sessionId,
-        isNewSession: !state.sessionId,
+        isNewSession,
         model: state.model ?? config.model,
         agent: state.agent ?? config.agent,
         autoApprove: config.autoApprove,
@@ -130,6 +218,9 @@ async function main(): Promise<void> {
         bin: config.opencodeBin,
         serverUrl: attachUrl,
         files,
+        outboxDir: config.outboxDir,
+        memoryDir: memPaths.dir,
+        memory: isNewSession ? await loadMemoryContext(config.dataDir) : undefined,
         onProgress: (note) => {
           const now = Date.now();
           if (now - progressTimer.lastNote > 20_000) {
@@ -143,12 +234,15 @@ async function main(): Promise<void> {
       console.log(`[opencode] chat ${chatId}: done in ${secs}s, session ${result.sessionId ?? "?"}, ${result.text.length} chars`);
 
       const questions = parseAskBlocks(result.text);
-      const body = stripAskBlocks(result.text);
+      const sends = parseSendBlocks(result.text);
+      const body = stripSendBlocks(stripAskBlocks(result.text));
       const footer =
         result.tokens || result.cost !== undefined
           ? `\n\n— done in ${secs}s${result.tokens ? ` · tokens ${result.tokens.input}in/${result.tokens.output}out` : ""}${result.cost !== undefined ? ` · $${result.cost.toFixed(4)}` : ""}`
           : `\n\n— done in ${secs}s`;
       if (body) await api.sendChunked(chatId, body + (questions.length > 0 ? "" : footer), replyTo);
+      const sentPaths = await deliverSendFiles(chatId, sends);
+      await deliverOutbox(chatId, await collectOutbox(outboxBefore), sentPaths);
 
       for (const q of questions) {
         if (q.options.length > 0) {
@@ -205,6 +299,8 @@ async function main(): Promise<void> {
       const state = store.getChat(chatKey);
       const healthy = attachUrl ? await isServeHealthy(attachUrl) : true;
       const uptimeMin = Math.round((Date.now() - startedAt) / 60000);
+      const memSize = (await readMemoryFile(config.dataDir)).length;
+      const cronCount = store.getCrons().filter((j) => j.chatId === chatId).length;
       await api.sendMessage(
         chatId,
         [
@@ -212,10 +308,13 @@ async function main(): Promise<void> {
           `bot uptime: ${uptimeMin}m`,
           `workDir: ${config.workDir}`,
           `opencode server: ${attachUrl ? `${attachUrl} (${healthy ? "healthy" : "UNREACHABLE"})` : "per-message runs"}`,
+          `browser MCP: ${botHome.playwrightMcpCli ? "ready ✅" : "unavailable ⚠️"}`,
           `session: ${state.sessionId ?? "none yet"}`,
           `model override: ${state.model ?? config.model ?? "(opencode default)"}`,
           `agent: ${state.agent ?? config.agent}`,
           `auto-approve: ${config.autoApprove ? "ON" : "OFF"}`,
+          `memory: ${memSize} chars`,
+          `scheduled tasks: ${cronCount}`,
         ].join("\n"),
         replyTo,
       );
@@ -238,13 +337,17 @@ async function main(): Promise<void> {
           return;
         }
         const state = store.getChat(chatKey);
-        store.setChat(chatKey, { ...state, modelList: free.map((m) => m.id) });
+        store.setChat(chatKey, {
+          ...state,
+          modelList: free.map((m) => m.id),
+          pendingSelect: { kind: "model", options: free.map((m) => m.id), expiresAt: Date.now() + 180000 },
+        });
         const lines = free.map(
           (m, i) => `${i + 1}. ${m.id}${m.vision ? " 👁" : ""}${m.contextK ? ` · ${m.contextK}k ctx` : ""}`,
         );
         await api.sendChunked(
           chatId,
-          `🆓 Free models (opencode provider):\n${lines.join("\n")}\n\n👁 = can see images. Switch with /model <number|id>.`,
+          `🆓 Free models (opencode provider):\n${lines.join("\n")}\n\n👁 = can see images. Just reply with the number (e.g. 2), or /model <number|id>.`,
           replyTo,
         );
       } catch (err) {
@@ -262,11 +365,15 @@ async function main(): Promise<void> {
           return;
         }
         const state = store.getChat(chatKey);
-        store.setChat(chatKey, { ...state, modelList: ids });
+        store.setChat(chatKey, {
+          ...state,
+          modelList: ids,
+          pendingSelect: { kind: "model", options: ids, expiresAt: Date.now() + 180000 },
+        });
         const lines = ids.map((id, i) => `${i + 1}. ${id}`);
         await api.sendChunked(
           chatId,
-          `🧠 Models${arg ? ` (${arg})` : ""} — ${ids.length} total:\n${lines.join("\n")}\n\nSwitch with /model <number|id>. Use /free for free ones.`,
+          `🧠 Models${arg ? ` (${arg})` : ""} — ${ids.length} total:\n${lines.join("\n")}\n\nJust reply with the number, or /model <number|id>. Use /free for free ones.`,
           replyTo,
         );
       } catch (err) {
@@ -300,9 +407,13 @@ async function main(): Promise<void> {
           return;
         }
         const state = store.getChat(chatKey);
-        store.setChat(chatKey, { ...state, sessionList: sessions.slice(0, 30) });
+        store.setChat(chatKey, {
+          ...state,
+          sessionList: sessions.slice(0, 30),
+          pendingSelect: { kind: "session", options: sessions.slice(0, 30).map((s) => s.id), expiresAt: Date.now() + 180000 },
+        });
         const lines = sessions.slice(0, 30).map((s, i) => `${i + 1}. ${s.title}\n   ${s.id}${s.id === state.sessionId ? " ← current" : ""}`);
-        await api.sendChunked(chatId, `📚 Recent sessions:\n${lines.join("\n")}\n\nJump with /switch <number|id>.`, replyTo);
+        await api.sendChunked(chatId, `📚 Recent sessions:\n${lines.join("\n")}\n\nJust reply with the number, or /switch <number|id>.`, replyTo);
       } catch (err) {
         await api.sendMessage(chatId, `❌ ${(err as Error).message.slice(0, 1000)}`, replyTo);
       }
@@ -332,6 +443,104 @@ async function main(): Promise<void> {
       }
       store.setChat(chatKey, { ...state, sessionId: target });
       await api.sendMessage(chatId, `✅ Switched to session ${target}. Your next message continues it.`, replyTo);
+      return;
+    }
+
+    if (cmd === "/memory") {
+      const mem = await readMemoryFile(config.dataDir);
+      await api.sendChunked(chatId, mem ? `🧠 Long-term memory:\n\n${mem}` : "🧠 Memory is empty. Tell me things with /remember <fact>, or just say “remember …” and I'll file it.", replyTo);
+      return;
+    }
+
+    if (cmd === "/remember") {
+      if (!arg) {
+        await api.sendMessage(chatId, "Usage: /remember <fact to store in long-term memory>", replyTo);
+        return;
+      }
+      await rememberFact(config.dataDir, arg);
+      await api.sendMessage(chatId, "✅ Remembered.", replyTo);
+      return;
+    }
+
+    if (cmd === "/shot") {
+      const [url, ...noteParts] = arg.split(/\s+/);
+      if (!url || !/^https?:\/\//i.test(url)) {
+        await api.sendMessage(chatId, "Usage: /shot <https-url> [what to check]", replyTo);
+        return;
+      }
+      const note = noteParts.join(" ").trim();
+      await forwardToOpencode(
+        chatId,
+        replyTo,
+        `Use your playwright browser tools: navigate to ${url}, ${note || "review the page"}. ` +
+          `Take a viewport screenshot and save it to ${config.outboxDir} (create the dir if needed). ` +
+          `Reply with a short summary of what you see.`,
+      );
+      return;
+    }
+
+    if (cmd === "/cron") {
+      const m = /^(every\s+\S+|daily\s+\S+)\s+([\s\S]+)$/.exec(arg);
+      const specStr = m ? m[1].toLowerCase() : "";
+      const task = m ? m[2].trim() : "";
+      const spec = parseSpec(specStr);
+      if (!spec || !task) {
+        await api.sendMessage(
+          chatId,
+          "Usage: /cron <every 30m|every 2h|daily 09:30> <task>\nExample: /cron every 1h check my site is up and report status",
+          replyTo,
+        );
+        return;
+      }
+      const mine = store.getCrons().filter((j) => j.chatId === chatId);
+      if (mine.length >= 10) {
+        await api.sendMessage(chatId, "❌ Max 10 scheduled tasks per chat. Remove one with /uncron first.", replyTo);
+        return;
+      }
+      const job = {
+        id: `c${randomBytes(3).toString("hex")}`,
+        chatId,
+        spec: specStr,
+        task: task.slice(0, 1000),
+        nextRun: computeNext(spec, Date.now()),
+        createdAt: new Date().toISOString(),
+        failures: 0,
+      };
+      store.addCron(job);
+      await api.sendMessage(
+        chatId,
+        `⏰ Scheduled (${describeSpec(spec)}, id ${job.id}):\n“${job.task}”\nNext run: ${formatNext(job.nextRun)}`,
+        replyTo,
+      );
+      return;
+    }
+
+    if (cmd === "/crons") {
+      const mine = store.getCrons().filter((j) => j.chatId === chatId);
+      if (mine.length === 0) {
+        await api.sendMessage(chatId, "No scheduled tasks. Add one: /cron <every 30m|daily 09:30> <task>", replyTo);
+        return;
+      }
+      const lines = mine.map(
+        (j, i) => `${i + 1}. [${j.id}] ${describeSpec(parseSpec(j.spec) ?? { kind: "interval", everyMs: 3600000 })}\n   “${j.task.slice(0, 120)}”\n   next: ${formatNext(j.nextRun)}`,
+      );
+      await api.sendChunked(chatId, `⏰ Scheduled tasks:\n${lines.join("\n")}\n\nDelete with /uncron <number|id>.`, replyTo);
+      return;
+    }
+
+    if (cmd === "/uncron") {
+      if (!arg) {
+        await api.sendMessage(chatId, "Usage: /uncron <number|id> (see /crons).", replyTo);
+        return;
+      }
+      const mine = store.getCrons().filter((j) => j.chatId === chatId);
+      let target = mine.find((j) => j.id === arg)?.id;
+      if (!target && /^\d+$/.test(arg)) target = mine[Number(arg) - 1]?.id;
+      if (!target || !store.removeCron(target)) {
+        await api.sendMessage(chatId, `Unknown task "${arg}". See /crons.`, replyTo);
+        return;
+      }
+      await api.sendMessage(chatId, `🗑️ Deleted scheduled task ${target}.`, replyTo);
       return;
     }
 
@@ -367,6 +576,27 @@ async function main(): Promise<void> {
         busyChats.delete(chatId);
       }
       return;
+    }
+
+    // Bare-number reply right after /models /free /sessions → pick that option.
+    if (/^\d+$/.test(text)) {
+      const numState = store.getChat(chatKey);
+      const sel = numState.pendingSelect;
+      if (sel && Date.now() < sel.expiresAt) {
+        const picked = sel.options[Number(text) - 1];
+        if (!picked) {
+          await api.sendMessage(chatId, `Pick 1–${sel.options.length}, or send a message to talk to the agent.`, replyTo);
+          return;
+        }
+        if (sel.kind === "model") {
+          store.setChat(chatKey, { ...numState, model: picked, pendingSelect: undefined });
+          await api.sendMessage(chatId, `✅ Model set to ${picked} for this chat (applies from your next message).`, replyTo);
+        } else {
+          store.setChat(chatKey, { ...numState, sessionId: picked, pendingSelect: undefined });
+          await api.sendMessage(chatId, `✅ Switched to session ${picked}. Your next message continues it.`, replyTo);
+        }
+        return;
+      }
     }
 
     // Default: forward to opencode (the AI brain).
@@ -409,6 +639,46 @@ async function main(): Promise<void> {
 
   console.log("[bot] polling for updates…");
   let offset = store.getOffset();
+
+  // Scheduled tasks (hermes/openclaw-style cron): tick every 20s, run due jobs.
+  const cronTimer = setInterval(() => {
+    if (stopped) return;
+    const now = Date.now();
+    for (const job of store.getCrons()) {
+      if (job.nextRun > now) continue;
+      const spec = parseSpec(job.spec);
+      if (!spec) {
+        console.error(`[cron] dropping job ${job.id} with bad spec`);
+        store.removeCron(job.id);
+        void api.sendMessage(job.chatId, `⚠️ Deleted scheduled task ${job.id}: unreadable schedule.`);
+        continue;
+      }
+      store.updateCron(job.id, {
+        nextRun: computeNext(spec, now),
+        lastRun: new Date().toISOString(),
+        failures: 0,
+      });
+      if (busyChats.has(job.chatId)) {
+        console.log(`[cron] chat ${job.chatId} busy, job ${job.id} deferred to next tick`);
+        continue;
+      }
+      console.log(`[cron] running job ${job.id} in chat ${job.chatId}`);
+      void forwardToOpencode(job.chatId, undefined, `⏰ Scheduled task (${describeSpec(spec)}):\n${job.task}`).catch(
+        (err) => {
+          console.error(`[cron] job ${job.id} failed: ${(err as Error).message}`);
+          const current = store.getCrons().find((j) => j.id === job.id);
+          const failures = (current?.failures ?? 0) + 1;
+          if (failures >= 5) {
+            store.removeCron(job.id);
+            void api.sendMessage(job.chatId, `⚠️ Deleted scheduled task ${job.id} after 5 failures.`);
+          } else {
+            store.updateCron(job.id, { failures });
+          }
+        },
+      );
+    }
+  }, 20000);
+  cronTimer.unref?.();
 
   while (!stopped) {
     let updates;

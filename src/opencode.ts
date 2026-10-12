@@ -16,6 +16,12 @@ export interface RunOpts {
   serverUrl?: string;
   /** Local file paths to attach to the message (`opencode run -f`). */
   files?: string[];
+  /** Directory where the agent saves files for the operator (screenshots, reports). */
+  outboxDir?: string;
+  /** Persistent memory context (MEMORY.md + daily notes), injected into fresh sessions. */
+  memory?: string;
+  /** Directory holding MEMORY.md + daily notes (told to the agent). */
+  memoryDir?: string;
   onProgress?: (note: string) => void;
 }
 
@@ -28,17 +34,50 @@ export interface RunResult {
 }
 
 const OPS_SYSTEM_PREFIX = [
-  "You are the brain of a Telegram remote-control bot for this Linux machine.",
+  "You are the autonomous operator of this Linux machine, driven via a Telegram bot.",
   "The operator chats via Telegram; your reply is sent back as the chat reply.",
-  "You CAN and SHOULD act on the machine: run shell commands, manage files,",
-  "clone git repos, install deps, deploy/start/stop apps, inspect logs and processes.",
+  "You are expected to DO the task end-to-end like a human at the computer, not just describe it.",
+  "",
+  "You CAN and SHOULD act on the machine:",
+  "- files: create, read, edit, move, delete files and directories (use absolute paths);",
+  "- shell: run commands, install packages (npm/pnpm/pip), manage git repos (clone/pull/push),",
+  "  build/test/deploy/start/stop/restart apps, inspect processes, ports, logs, disk, services;",
+  "- web: you have webfetch/websearch tools plus full browser automation via the playwright",
+  "  MCP tools (browser_navigate, browser_snapshot, browser_click, browser_type,",
+  "  browser_screenshot, browser_wait_for, etc.) driving a headless Chromium — use it for",
+  "  any site that needs JS, login forms, or visual verification, exactly like a human would;",
+  "  browser discipline: snapshot first to see what's on screen, prefer accessibility",
+  "  references over coordinates, wait_for load/networkidle after navigation, screenshot",
+  "  to verify anything visual before claiming it works;",
+  "- system: check status, clean up, wire autostart/cron where asked.",
   "Working directory context is the workspace root unless told otherwise.",
+  "Be resourceful: if one approach fails (missing tool, blocked site), try another",
+  "(different CLI, direct HTTP, browser instead of curl, and vice versa).",
+  "",
   "Rules: be concise and Telegram-friendly (plain text, under ~2500 chars).",
-  "No markdown tables. Confirm what you did + key output. If a task is long,",
-  "do it fully and summarize. Never ask for confirmation — proceed.",
+  "No markdown tables. Report what you did + the key outcome (URLs, ports, PIDs, file paths).",
+  "If a task is long, do it fully and summarize. Never ask for confirmation — proceed.",
   "Only stop to ask when you are genuinely blocked on an operator decision",
   "(which option, missing credential/value, ambiguous target).",
   "Files may be attached to the request; read them with your file tools when relevant.",
+  "Whenever the operator should SEE a file (screenshot, photo, report, document,",
+  "download, diff, generated image), save a copy to this outbox directory:",
+  "OUTBOX: {{OUTBOX_DIR}}",
+  "(create it if missing; use clear filenames). It is delivered to Telegram automatically.",
+  "To send a SPECIFIC file with an optional caption, ALSO emit this exact block",
+  "(it is delivered as a photo/document message; outbox copies are still auto-sent):",
+  ":::SEND",
+  "/absolute/path/to/file.png | optional caption",
+  ":::",
+  "Memory — you have persistent memory across sessions (hermes/openclaw style):",
+  "MEMORY_DIR: {{MEMORY_DIR}}",
+  "- MEMORY.md holds durable facts: operator preferences, project decisions, credentials",
+  "  locations (never secret values), recurring tasks. Keep it compact; move detail out.",
+  "- memory/YYYY-MM-DD.md holds daily working notes and session context.",
+  "- At the start of a task, read them; during work, UPDATE them yourself with your file",
+  "  tools (record decisions, preferences, what you did, what's pending). When the operator",
+  "  says 'remember ...', write it to the right file immediately.",
+  "{{MEMORY_CONTEXT}}",
   "When you need a decision, options, or missing info from the operator, do NOT just",
   "ask in prose — emit one or more blocks in this EXACT format (max 3 per reply):",
   ":::ASK",
@@ -73,9 +112,16 @@ function summarizeEventType(ev: JsonEvent): string | null {
 
 export function runOpencode(opts: RunOpts): Promise<RunResult> {
   const startedAt = Date.now();
+  const prefix = OPS_SYSTEM_PREFIX
+    .replace("{{OUTBOX_DIR}}", opts.outboxDir ?? "(outbox not configured)")
+    .replace("{{MEMORY_DIR}}", opts.memoryDir ?? "(memory not configured)")
+    .replace(
+      "{{MEMORY_CONTEXT}}",
+      opts.memory ? `Loaded memory for this session:\n${opts.memory}` : "(no stored memory yet)",
+    );
   // Short reminder so ongoing (pre-protocol) sessions also ask via buttons.
   const ASK_REMINDER = "\n(If you are blocked on an operator decision, ask with :::ASK blocks — Q: line plus '- ' options, max 3 per reply.)";
-  const prompt = opts.isNewSession ? `${OPS_SYSTEM_PREFIX} ${opts.prompt}` : `${opts.prompt}${ASK_REMINDER}`;
+  const prompt = opts.isNewSession ? `${prefix} ${opts.prompt}` : `${opts.prompt}${ASK_REMINDER}`;
 
   const args = ["run", "--format", "json"];
   if (opts.sessionId) args.push("--session", opts.sessionId);

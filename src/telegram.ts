@@ -172,6 +172,30 @@ export class TgApi {
       await this.sendMessage(chatId, chunks[i], i === 0 ? replyTo : undefined);
     }
   }
+
+  private async sendFile(method: "sendPhoto" | "sendDocument", chatId: number, filePath: string, caption?: string): Promise<void> {
+    const { readFile } = await import("node:fs/promises");
+    const path = await import("node:path");
+    const data = await readFile(filePath);
+    const form = new FormData();
+    form.set("chat_id", String(chatId));
+    const field = method === "sendPhoto" ? "photo" : "document";
+    form.set(field, new Blob([new Uint8Array(data)]), path.basename(filePath));
+    if (caption) form.set("caption", caption.slice(0, 1000));
+    const res = await fetch(`${this.base}/${method}`, { method: "POST", body: form });
+    if (!res.ok) {
+      const detail = await res.text().then((t) => t.slice(0, 300)).catch(() => res.statusText);
+      throw new Error(`Telegram ${method} failed: ${detail}`);
+    }
+  }
+
+  async sendPhoto(chatId: number, filePath: string, caption?: string): Promise<void> {
+    await this.sendFile("sendPhoto", chatId, filePath, caption);
+  }
+
+  async sendDocument(chatId: number, filePath: string, caption?: string): Promise<void> {
+    await this.sendFile("sendDocument", chatId, filePath, caption);
+  }
 }
 
 /** Split long replies into Telegram-safe ≤4096-char chunks on line boundaries. */

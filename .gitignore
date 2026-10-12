@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+data/bot-state.json
+data/bot-state.json.tmp
+data/inbox/

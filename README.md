@@ -19,6 +19,7 @@ Full instructions: **[usage.md](./usage.md)**.
 - 🆓 **Free-model browser** — `/free` lists free models with vision (👁) markers; reply with the number to switch
 - 📚 **Session browser** — `/sessions` lists recent runs; reply with the number to jump
 - ⏰ **Scheduled tasks** — `/cron every 30m …`, `/crons`, `/uncron`
+- 📤 **Direct sends** — `/send <path>` pushes any machine file to chat instantly
 - 🔧 **Direct shell** — `/exec <command>` runs without AI; `/agent`, `/status`, `/new`, `/reset`
 - 🖥️ **Background server** — auto-starts and reuses `opencode serve` (`--attach` mode)
 

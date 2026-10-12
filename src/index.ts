@@ -50,6 +50,7 @@ const HELP_TEXT = [
   "/memory — show what the agent remembers about you",
   "/remember <fact> — save something to long-term memory",
   "/shot <url> [note] — open a page in the agent browser, screenshot to chat",
+  "/send <absolute-path> [caption] — send any machine file to chat instantly",
   "/cron <every 30m|every 2h|daily 09:30> <task> — run a task on schedule",
   "/crons — list scheduled tasks",
   "/uncron <number|id> — delete a scheduled task",
@@ -118,8 +119,28 @@ async function main(): Promise<void> {
     enabled: config.autoServe,
   });
   // Explicit OPENCODE_SERVER_URL wins over the auto-started server.
-  const attachUrl = config.serverUrl ?? serverUrl;
+  let attachUrl = config.serverUrl ?? serverUrl;
   if (attachUrl) console.log(`[bot] opencode runs will --attach ${attachUrl}`);
+
+  /** Self-heal: restart the background server if it died; fall back to direct runs. */
+  async function refreshServe(): Promise<void> {
+    if (!config.autoServe || config.serverUrl || !attachUrl) return;
+    if (await isServeHealthy(attachUrl)) return;
+    console.warn("[serve] background server lost, restarting…");
+    try {
+      const fresh = await ensureServe({
+        bin: config.opencodeBin,
+        cwd: config.workDir,
+        port: config.servePort,
+        enabled: true,
+      });
+      attachUrl = fresh.serverUrl;
+      console.log(`[serve] now using ${attachUrl ?? "direct per-message runs (fallback)"}`);
+    } catch (err) {
+      console.error(`[serve] restart failed: ${(err as Error).message}; using direct runs`);
+      attachUrl = undefined;
+    }
+  }
 
   const startedAt = Date.now();
   const busyChats = new Set<number>();
@@ -199,6 +220,19 @@ async function main(): Promise<void> {
     return delivered;
   }
 
+  /** Send a reply, falling back to a plain message if the reply target is gone. */
+  async function sendReply(chatId: number, text: string, replyTo: number | undefined): Promise<void> {
+    try {
+      await api.sendChunked(chatId, text, replyTo);
+    } catch (err) {
+      if (replyTo !== undefined && /repl/i.test((err as Error).message)) {
+        await api.sendChunked(chatId, text);
+      } else {
+        throw err;
+      }
+    }
+  }
+
   /** Shared pipeline: prompt (+optional files) → opencode → reply + ASK buttons. */
   async function forwardToOpencode(chatId: number, replyTo: number | undefined, prompt: string, files?: string[]): Promise<void> {
     if (busyChats.has(chatId)) {
@@ -209,6 +243,7 @@ async function main(): Promise<void> {
     const typingTimer = setInterval(() => void api.sendChatAction(chatId, "typing"), 4000);
     const progressTimer = { lastNote: 0 };
     const outboxBefore = new Set<string>(await readdir(config.outboxDir).catch(() => [] as string[]));
+    await refreshServe();
     try {
       await api.sendChatAction(chatId, "typing");
       const t0 = Date.now();
@@ -252,7 +287,7 @@ async function main(): Promise<void> {
         result.tokens || result.cost !== undefined
           ? `\n\n— done in ${secs}s${result.tokens ? ` · tokens ${result.tokens.input}in/${result.tokens.output}out` : ""}${result.cost !== undefined ? ` · $${result.cost.toFixed(4)}` : ""}`
           : `\n\n— done in ${secs}s`;
-      if (body) await api.sendChunked(chatId, body + (questions.length > 0 ? "" : footer), replyTo);
+      if (body) await sendReply(chatId, body + (questions.length > 0 ? "" : footer), replyTo);
       const sentPaths = await deliverSendFiles(chatId, sends);
       await deliverOutbox(chatId, await collectOutbox(outboxBefore), sentPaths);
 
@@ -272,7 +307,11 @@ async function main(): Promise<void> {
       if (questions.length > 0 && !body) await api.sendMessage(chatId, footer.trim());
     } catch (err) {
       console.error(`[opencode] chat ${chatId}: FAILED ${(err as Error).message.slice(0, 300)}`);
-      await api.sendMessage(chatId, `❌ ${(err as Error).message.slice(0, 3000)}`, replyTo);
+      try {
+        await sendReply(chatId, `❌ ${(err as Error).message.slice(0, 3000)}`, replyTo);
+      } catch {
+        /* chat may be gone; already logged */
+      }
     } finally {
       clearInterval(typingTimer);
       busyChats.delete(chatId);
@@ -510,8 +549,32 @@ async function main(): Promise<void> {
       return;
     }
 
-    if (cmd === "/shot") {
-      const [url, ...noteParts] = arg.split(/\s+/);
+    if (cmd === "/send") {
+      if (!arg) {
+        await api.sendMessage(chatId, "Usage: /send <absolute-path-on-machine> [caption]", replyTo);
+        return;
+      }
+      const parts = arg.split(/\s+/);
+      const filePath = parts[0];
+      const caption = parts.slice(1).join(" ").trim();
+      if (!path.isAbsolute(filePath)) {
+        await api.sendMessage(chatId, "❌ Give an absolute path, e.g. /send /home/runner/workspace/data/outbox/shot.png", replyTo);
+        return;
+      }
+      try {
+        const info = await stat(filePath);
+        if (!info.isFile()) throw new Error("not a file");
+        if (info.size > 20 * 1024 * 1024) throw new Error("larger than 20MB");
+        const name = path.basename(filePath);
+        if (/\.(jpe?g|png|gif|webp)$/i.test(name)) await api.sendPhoto(chatId, filePath, caption || `📷 ${name}`);
+        else await api.sendDocument(chatId, filePath, caption || `📎 ${name}`);
+      } catch (err) {
+        await api.sendMessage(chatId, `❌ Cannot send: ${(err as Error).message.slice(0, 300)}`, replyTo);
+      }
+      return;
+    }
+
+    if (cmd === "/shot") {      const [url, ...noteParts] = arg.split(/\s+/);
       if (!url || !/^https?:\/\//i.test(url)) {
         await api.sendMessage(chatId, "Usage: /shot <https-url> [what to check]", replyTo);
         return;

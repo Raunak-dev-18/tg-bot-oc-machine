@@ -87,6 +87,7 @@ Free-text questions are asked as `❓ … (Reply with your answer in chat.)` —
 | `/memory` | Show long-term memory (`MEMORY.md`) |
 | `/remember <fact>` | Save a fact to long-term memory (or just say “remember …”) |
 | `/shot <https-url> [note]` | Open a page in the agent browser, screenshot it straight to chat |
+| `/send <absolute-path> [caption]` | Send any machine file to chat instantly, no AI round-trip |
 | `/cron <every 30m\|every 2h\|daily 09:30> <task>` | Run a task on schedule, delivered to this chat |
 | `/crons` | List scheduled tasks |
 | `/uncron <number\|id>` | Delete a scheduled task |
@@ -118,6 +119,7 @@ current model can't, the bot warns you after replying.
    documents; max 5 files, 20 MB each).
 2. **Explicit sends** — the agent emits `:::SEND` blocks for specific files:
    `/absolute/path.png | optional caption` → photo/document message.
+3. **Direct** — `/send <absolute-path> [caption]` sends any machine file yourself.
 
 ---
 
@@ -220,7 +222,8 @@ mouse/keyboard control of GUI apps is out of scope — browser + shell cover it.
 
 - **Bot exits `Missing TELEGRAM_BOT_TOKEN`** — export it or put it in `.env`.
 - **Replies say opencode failed** — check the bot logs; verify `opencode` works manually
-  (`opencode run "hi"`), and that the serve port is free.
+  (`opencode run "hi"`). If the background server died, your next message restarts it
+  automatically (self-heal); check `/status` for server health.
 - **Browser tools missing** (`/status` shows unavailable) — need `@playwright/mcp`
   installed and a working `CHROMIUM_PATH`; restart the bot after installing.
 - **Images not understood** — switch to a 👁 model from `/free`.

@@ -47,12 +47,29 @@ export interface TgCallbackQuery {
   data?: string;
 }
 
+export interface TgReaction {
+  type: string;
+  emoji?: string;
+  custom_emoji_id?: string;
+}
+
+export interface TgMessageReaction {
+  chat: TgChat;
+  message_id: number;
+  user?: TgUser;
+  actor_chat?: TgChat;
+  old_reaction: TgReaction[];
+  new_reaction: TgReaction[];
+}
+
 export interface TgUpdate {
   update_id: number;
   message?: TgMessage;
   edited_message?: TgMessage;
   channel_post?: TgMessage;
   callback_query?: TgCallbackQuery;
+  message_reaction?: TgMessageReaction;
+  message_reaction_count?: unknown;
 }
 
 export interface TgFile {
@@ -79,6 +96,8 @@ interface ApiEnvelope<T> {
 
 export class TgApi {
   private base: string;
+  /** Recent bot-sent messages for reaction context: "chatId:msgId" → snippet. */
+  private sentCache = new Map<string, { text: string; at: number }>();
 
   constructor(private token: string) {
     this.base = `https://api.telegram.org/bot${token}`;
@@ -115,7 +134,7 @@ export class TgApi {
       {
         offset,
         timeout: timeoutSec,
-        allowed_updates: ["message", "edited_message", "channel_post", "callback_query"],
+        allowed_updates: ["message", "edited_message", "channel_post", "callback_query", "message_reaction"],
       },
       (timeoutSec + 15) * 1000,
     );
@@ -129,7 +148,7 @@ export class TgApi {
     }
   }
 
-  async sendMessage(chatId: number, text: string, replyTo?: number, replyMarkup?: ReplyMarkup): Promise<void> {
+  async sendMessage(chatId: number, text: string, replyTo?: number, replyMarkup?: ReplyMarkup): Promise<TgMessage> {
     const payload: Record<string, unknown> = {
       chat_id: chatId,
       text,
@@ -137,7 +156,37 @@ export class TgApi {
     };
     if (replyTo !== undefined) payload.reply_to_message_id = replyTo;
     if (replyMarkup !== undefined) payload.reply_markup = replyMarkup;
-    await this.call("sendMessage", payload);
+    const sent = await this.call<TgMessage>("sendMessage", payload);
+    this.rememberSent(chatId, sent.message_id, text);
+    return sent;
+  }
+
+  /** What did we recently send as message_id in chatId? (for reaction context) */
+  sentSnippet(chatId: number, messageId: number): string | undefined {
+    return this.sentCache.get(`${chatId}:${messageId}`)?.text;
+  }
+
+  private rememberSent(chatId: number, messageId: number, text: string): void {
+    this.sentCache.set(`${chatId}:${messageId}`, { text: text.slice(0, 300), at: Date.now() });
+    if (this.sentCache.size > 300) {
+      const cutoff = Date.now() - 2 * 3600 * 1000;
+      for (const [key, value] of this.sentCache) {
+        if (value.at < cutoff) this.sentCache.delete(key);
+      }
+    }
+  }
+
+  /** React to a message (best-effort — never throws). */
+  async react(chatId: number, messageId: number, emoji: string): Promise<void> {
+    try {
+      await this.call("setMessageReaction", {
+        chat_id: chatId,
+        message_id: messageId,
+        reaction: [{ type: "emoji", emoji }],
+      }, 10_000);
+    } catch {
+      // Reactions may be unavailable in some chats — never break the flow.
+    }
   }
 
   async answerCallback(queryId: string, text?: string): Promise<void> {
@@ -186,6 +235,12 @@ export class TgApi {
     if (!res.ok) {
       const detail = await res.text().then((t) => t.slice(0, 300)).catch(() => res.statusText);
       throw new Error(`Telegram ${method} failed: ${detail}`);
+    }
+    try {
+      const body = (await res.json()) as ApiEnvelope<TgMessage>;
+      if (body.ok) this.rememberSent(chatId, body.result.message_id, caption || path.basename(filePath));
+    } catch {
+      // Non-critical: message went through, only context tracking failed.
     }
   }
 

@@ -34,6 +34,7 @@ const HELP_TEXT = [
   "install things, run and deploy apps. Files it produces (screenshots,",
   "reports) are delivered back here automatically.",
   "When the agent needs a decision, you'll get tappable option buttons.",
+  "React to my replies (👍/👎…) — I notice and learn. I react 👀→👍 on your tasks.",
   "",
   "Commands:",
   "/start — welcome + status",
@@ -47,7 +48,7 @@ const HELP_TEXT = [
   "/effort <minimal|low|medium|high|xhigh|max> — reasoning effort for this chat",
   "/effort — show current effort + available levels for your model",
   "/effort off — back to model default",
-  "/sessions — list recent opencode sessions, then reply with the number",
+  "/sessions — last 10 opencode sessions by title, then reply with the number",
   "/switch <number|session-id> — continue a different session",
   "/memory — show what the agent remembers about you",
   "/remember <fact> — save something to long-term memory",
@@ -254,7 +255,13 @@ async function main(): Promise<void> {
   }
 
   /** Shared pipeline: prompt (+optional files) → opencode → reply + ASK buttons. */
-  async function forwardToOpencode(chatId: number, replyTo: number | undefined, prompt: string, files?: string[]): Promise<void> {
+  async function forwardToOpencode(
+    chatId: number,
+    replyTo: number | undefined,
+    prompt: string,
+    files?: string[],
+    reactTo?: number,
+  ): Promise<void> {
     if (busyChats.has(chatId)) {
       await api.sendMessage(chatId, "⏳ Still working on the previous request — please wait.", replyTo);
       return;
@@ -327,8 +334,10 @@ async function main(): Promise<void> {
         }
       }
       if (questions.length > 0 && !body) await api.sendMessage(chatId, footer.trim());
+      if (reactTo !== undefined) await api.react(chatId, reactTo, "👍");
     } catch (err) {
       console.error(`[opencode] chat ${chatId}: FAILED ${(err as Error).message.slice(0, 300)}`);
+      if (reactTo !== undefined) await api.react(chatId, reactTo, "👎");
       try {
         await sendReply(chatId, `❌ ${(err as Error).message.slice(0, 3000)}`, replyTo);
       } catch {
@@ -516,13 +525,14 @@ async function main(): Promise<void> {
           return;
         }
         const state = store.getChat(chatKey);
+        const top = sessions.slice(0, 10);
         store.setChat(chatKey, {
           ...state,
-          sessionList: sessions.slice(0, 30),
-          pendingSelect: { kind: "session", options: sessions.slice(0, 30).map((s) => s.id), expiresAt: Date.now() + 180000 },
+          sessionList: top,
+          pendingSelect: { kind: "session", options: top.map((s) => s.id), expiresAt: Date.now() + 180000 },
         });
-        const lines = sessions.slice(0, 30).map((s, i) => `${i + 1}. ${s.title}\n   ${s.id}${s.id === state.sessionId ? " ← current" : ""}`);
-        await api.sendChunked(chatId, `📚 Recent sessions:\n${lines.join("\n")}\n\nJust reply with the number, or /switch <number|id>.`, replyTo);
+        const lines = top.map((s, i) => `${i + 1}. ${s.title}\n   ${s.id}${s.id === state.sessionId ? " ← current" : ""}`);
+        await api.sendChunked(chatId, `📚 Last ${top.length} sessions:\n${lines.join("\n")}\n\nJust reply with the number, or /switch <number|id>.`, replyTo);
       } catch (err) {
         await api.sendMessage(chatId, `❌ ${(err as Error).message.slice(0, 1000)}`, replyTo);
       }
@@ -608,6 +618,8 @@ async function main(): Promise<void> {
         `Use your playwright browser tools: navigate to ${url}, ${note || "review the page"}. ` +
           `Take a viewport screenshot and save it to ${config.outboxDir} (create the dir if needed). ` +
           `Reply with a short summary of what you see.`,
+        undefined,
+        replyTo,
       );
       return;
     }
@@ -721,6 +733,7 @@ async function main(): Promise<void> {
       const typingTimer = setInterval(() => void api.sendChatAction(chatId, "typing"), 4000);
       try {
         await refreshServe();
+        await api.react(chatId, replyTo, "👀");
         await api.sendMessage(chatId, `🔀 Running ${tasks.length} tasks in parallel…`, replyTo);
         const chatState = store.getChat(chatKey);
         const mem = await loadMemoryContext(config.dataDir);
@@ -767,6 +780,7 @@ async function main(): Promise<void> {
           for (const s of await deliverSendFiles(chatId, sends)) sentPaths.add(s);
         }
         await deliverOutbox(chatId, await collectOutbox(outboxBefore), sentPaths);
+        await api.react(chatId, replyTo, "👍");
       } finally {
         clearInterval(typingTimer);
         busyChats.delete(chatId);
@@ -830,7 +844,7 @@ async function main(): Promise<void> {
     }
 
     // Default: forward to opencode (the AI brain).
-    await forwardToOpencode(chatId, replyTo, text);
+    await forwardToOpencode(chatId, replyTo, text, undefined, replyTo);
   }
 
   async function handleMedia(chatId: number, replyTo: number, kind: "photo" | "document", fileId: string, fileName: string, fileSize: number | undefined, caption: string): Promise<void> {
@@ -860,7 +874,7 @@ async function main(): Promise<void> {
         kind === "photo"
           ? `${caption || "What is in this image? Describe it and help with anything actionable in it."}\n(Image saved at ${saved} — open it with your Read tool to see it.)`
           : `${caption || "Review the attached file and help with it."}\n(File saved at ${saved} — read it with your Read tool.)`;
-      await forwardToOpencode(chatId, replyTo, prompt, [saved]);
+      await forwardToOpencode(chatId, replyTo, prompt, [saved], replyTo);
       if (visionNote) await api.sendMessage(chatId, visionNote.trim());
     } catch (err) {
       await api.sendMessage(chatId, `❌ Could not process attachment: ${(err as Error).message.slice(0, 1000)}`, replyTo);
@@ -940,10 +954,36 @@ async function main(): Promise<void> {
           }
           await api.answerCallback(cb.id, `Answered: ${(answer.option ?? "").slice(0, 40)}`);
           const chatId = cb.message?.chat.id ?? answer.chatId;
-          void forwardToOpencode(chatId, cb.message?.message_id, `My answer to "${answer.question}": ${answer.option ?? "(no option)"}. Continue the task with this answer.`);
+          void forwardToOpencode(chatId, cb.message?.message_id, `My answer to "${answer.question}": ${answer.option ?? "(no option)"}. Continue the task with this answer.`, undefined, cb.message?.message_id);
         } else {
           await api.answerCallback(cb.id);
         }
+        continue;
+      }
+
+      // Reactions to bot messages — the agent learns what you thought.
+      if (update.message_reaction) {
+        const mr = update.message_reaction;
+        if (!isAllowed(mr.user?.id, mr.user?.username)) continue;
+        const emojis = mr.new_reaction
+          .filter((r) => r.type === "emoji" && r.emoji)
+          .map((r) => r.emoji as string);
+        if (emojis.length === 0) continue; // reaction removed — ignore
+        const chatId = mr.chat.id;
+        const snippet = api.sentSnippet(chatId, mr.message_id) ?? "(message not in recent cache)";
+        const POSITIVE = ["👍", "❤️", "🔥", "🎉", "👏", "🥰", "💯", "❤"];
+        const NEGATIVE = ["👎", "💩", "😡", "🤬", "👿", "😠"];
+        const tone = emojis.some((e) => NEGATIVE.includes(e))
+          ? "negative — they disliked it. Apologize briefly, ask ONE question about what to fix, and note it in memory."
+          : emojis.some((e) => POSITIVE.includes(e))
+            ? "positive — they liked it. Thank them in one short line and note any preference signal in memory."
+            : "neutral/ambiguous — acknowledge in one short line, no fuss.";
+        console.log(`[reaction] chat ${chatId} user ${mr.user?.id} ${emojis.join("")} on msg ${mr.message_id}`);
+        void forwardToOpencode(
+          chatId,
+          undefined,
+          `[Operator reaction] You received ${emojis.join(" ")} on your message: "${snippet}". Tone: ${tone} Keep it under 300 chars, no ASK blocks needed unless you're asking what to fix.`,
+        ).catch((err) => console.error(`[reaction] ${(err as Error).message}`));
         continue;
       }
 
@@ -955,6 +995,7 @@ async function main(): Promise<void> {
           console.warn(`[auth] rejected media from user ${media.message.from?.id} in chat ${chatId}`);
           continue;
         }
+        void api.react(chatId, media.message.message_id, "👀");
         void handleMedia(chatId, media.message.message_id, media.kind, media.fileId, media.fileName, media.fileSize, media.caption).catch((err) =>
           console.error(`[media] ${(err as Error).message}`),
         );
@@ -976,6 +1017,7 @@ async function main(): Promise<void> {
         continue;
       }
 
+      void api.react(chatId, message.message_id, "👀");
       void handleMessage(chatId, message.message_id, text).catch((err) =>
         console.error(`[msg] ${(err as Error).message}`),
       );

@@ -68,6 +68,12 @@ Replies are chunked to Telegram's limits automatically and end with a
 each). Tap one — your answer flows back into the same session and work continues.
 Free-text questions are asked as `❓ … (Reply with your answer in chat.)` — just reply.
 
+**Reactions, both ways.** React to any bot reply (👍 ❤️ 👎 …) — the update reaches the
+agent with the original message attached: praise gets a brief thanks + a memory note,
+criticism gets an apology and an offer to fix. The bot also reacts to *your* messages:
+👀 while working, 👍 when done, 👎 on failure. (Only Telegram-native reaction emoji
+work — e.g. ✅/❌ are rejected by the API.)
+
 ---
 
 ## 3. Commands
@@ -82,7 +88,7 @@ Free-text questions are asked as `❓ … (Reply with your answer in chat.)` —
 | `/model <number\|provider/model>` | Switch model for this chat (applies from next message). Bare `/model` shows current |
 | `/effort <minimal\|low\|medium\|high\|xhigh\|max>` | Reasoning effort for this chat (applies from next message). `/effort off` resets |
 | `/effort` | Show current effort + available levels for your model |
-| `/sessions` | Numbered list of recent opencode runs (current marked). Reply with the **number** to jump |
+| `/sessions` | Last 10 sessions by title (current marked). Reply with the **number** to jump |
 | `/switch <number\|session-id>` | Continue a different session |
 | `/memory` | Show long-term memory (`MEMORY.md`) |
 | `/remember <fact>` | Save a fact to long-term memory (or just say “remember …”) |

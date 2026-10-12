@@ -17,7 +17,8 @@ Full instructions: **[usage.md](./usage.md)**.
 - 🧠 **Persistent memory** — `MEMORY.md` + daily notes, agent-maintained (`/memory`, `/remember`)
 - 🌐 **Browser automation** — headless Chromium via Playwright MCP, `/shot <url>` screenshots
 - 🆓 **Free-model browser** — `/free` lists free models with vision (👁) markers; reply with the number to switch
-- 📚 **Session browser** — `/sessions` lists recent runs; reply with the number to jump
+- 📚 **Session browser** — `/sessions` shows last 10 by title; reply with the number to jump
+- 👍 **Two-way reactions** — react to bot replies (it learns); it reacts 👀→👍 on your tasks
 - ⏰ **Scheduled tasks** — `/cron every 30m …`, `/crons`, `/uncron`
 - 🛠️ **Skills** — drop-in `SKILL.md` guides (`/skills`); **recall** past sessions (`/recall`); **parallel** runs (`/parallel a ;; b`)
 - 📤 **Direct sends** — `/send <path>` pushes any machine file to chat instantly

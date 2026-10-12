@@ -55,10 +55,15 @@ Just send messages. Examples:
 - `deploy the api-server and show me the logs`
 - `why is port 5000 not responding? fix it`
 - `go to example.com, log in, and screenshot the dashboard`
-- `search YouTube for lofi radio and tell me the top results`
+- `search YouTube for X and list the top 5`
 - `create a 5-slide presentation on our roadmap and send it`
 - `make a spreadsheet tracking expenses with totals and send it`
 - `remember that I prefer nemotron for coding`
+
+**Reply to quote.** Swipe-reply to any older message — the bot's or your own — and the
+agent sees exactly what you mean (`[The operator replied to YOUR earlier message: "…"]`
+is prepended to your prompt, capped at 1000 chars, works for photos/files too). "Change
+this one" finally understands what "this" is.
 
 Replies are chunked to Telegram's limits automatically and end with a
 `— done in Xs · tokens …` footer. While it works you'll see the typing indicator.

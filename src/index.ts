@@ -20,7 +20,10 @@ import {
   TgApi,
   chunkText,
   extractMedia,
+  extractQuote,
   extractText,
+  quotePrefix,
+  type QuotedMessage,
   type ReplyMarkup,
 } from "./telegram.js";
 
@@ -34,6 +37,7 @@ const HELP_TEXT = [
   "install things, run and deploy apps. Files it produces (screenshots,",
   "reports) are delivered back here automatically.",
   "When the agent needs a decision, you'll get tappable option buttons.",
+  "Tip: reply (swipe) to any older message — mine or yours — and I'll know exactly what you mean.",
   "React to my replies (👍/👎…) — I notice and learn. I react with what I feel.",
   "",
   "Commands:",
@@ -412,7 +416,7 @@ async function main(): Promise<void> {
     return hit ?? raw;
   }
 
-  async function handleMessage(chatId: number, replyTo: number, text: string): Promise<void> {
+  async function handleMessage(chatId: number, replyTo: number, text: string, quote?: QuotedMessage): Promise<void> {
     const chatKey = String(chatId);
     const [cmd, ...rest] = text.split(/\s+/);
     const arg = rest.join(" ").trim();
@@ -909,11 +913,11 @@ async function main(): Promise<void> {
       }
     }
 
-    // Default: forward to opencode (the AI brain).
-    await forwardToOpencode(chatId, replyTo, text, undefined, replyTo);
+    // Default: forward to opencode (the AI brain), with quoted context if replying.
+    await forwardToOpencode(chatId, replyTo, quote ? `${quotePrefix(quote)}\n${text}` : text, undefined, replyTo);
   }
 
-  async function handleMedia(chatId: number, replyTo: number, kind: "photo" | "document", fileId: string, fileName: string, fileSize: number | undefined, caption: string): Promise<void> {
+  async function handleMedia(chatId: number, replyTo: number, kind: "photo" | "document", fileId: string, fileName: string, fileSize: number | undefined, caption: string, quote?: QuotedMessage): Promise<void> {
     if (fileSize !== undefined && fileSize > MAX_TG_FILE_BYTES) {
       await api.sendMessage(chatId, "❌ File too large for the Telegram Bot API (>20MB). Send a smaller file.", replyTo);
       return;
@@ -938,8 +942,8 @@ async function main(): Promise<void> {
 
       const prompt =
         kind === "photo"
-          ? `${caption || "What is in this image? Describe it and help with anything actionable in it."}\n(Image saved at ${saved} — open it with your Read tool to see it.)`
-          : `${caption || "Review the attached file and help with it."}\n(File saved at ${saved} — read it with your Read tool.)`;
+          ? `${quote ? quotePrefix(quote) + "\n" : ""}${caption || "What is in this image? Describe it and help with anything actionable in it."}\n(Image saved at ${saved} — open it with your Read tool to see it.)`
+          : `${quote ? quotePrefix(quote) + "\n" : ""}${caption || "Review the attached file and help with it."}\n(File saved at ${saved} — read it with your Read tool.)`;
       await forwardToOpencode(chatId, replyTo, prompt, [saved], replyTo);
       if (visionNote) await api.sendMessage(chatId, visionNote.trim());
     } catch (err) {
@@ -1062,7 +1066,8 @@ async function main(): Promise<void> {
           continue;
         }
         void api.react(chatId, media.message.message_id, "👀");
-        void handleMedia(chatId, media.message.message_id, media.kind, media.fileId, media.fileName, media.fileSize, media.caption).catch((err) =>
+        const mediaQuote = extractQuote(media.message, me.id);
+        void handleMedia(chatId, media.message.message_id, media.kind, media.fileId, media.fileName, media.fileSize, media.caption, mediaQuote).catch((err) =>
           console.error(`[media] ${(err as Error).message}`),
         );
         continue;
@@ -1084,11 +1089,12 @@ async function main(): Promise<void> {
       }
 
       void api.react(chatId, message.message_id, "👀");
-      void handleMessage(chatId, message.message_id, text).catch((err) =>
+      const quote = extractQuote(message, me.id);
+      void handleMessage(chatId, message.message_id, text, quote).catch((err) =>
         console.error(`[msg] ${(err as Error).message}`),
       );
       console.log(
-        `[msg] chat ${chatId} from user ${message.from?.id}${message.from?.username ? ` (@${message.from.username})` : ""}: ${text.slice(0, 80)}`,
+        `[msg] chat ${chatId} from user ${message.from?.id}${message.from?.username ? ` (@${message.from.username})` : ""}${quote ? ` (reply→msg ${quote.messageId})` : ""}: ${text.slice(0, 80)}`,
       );
     }
   }

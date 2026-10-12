@@ -37,6 +37,7 @@ export interface TgMessage {
   caption?: string;
   photo?: TgPhotoSize[];
   document?: TgDocument;
+  reply_to_message?: TgMessage;
   date: number;
 }
 
@@ -286,6 +287,39 @@ export function extractText(update: TgUpdate): { message: TgMessage; text: strin
   const text = (message.text ?? message.caption ?? "").trim();
   if (!text) return null;
   return { message, text };
+}
+
+export interface QuotedMessage {
+  text: string;
+  fromName: string;
+  isBot: boolean;
+  messageId: number;
+}
+
+/**
+ * What is this message replying to? Returns the quoted message (bot's older
+ * reply or the user's own earlier message) with attribution, if any.
+ */
+export function extractQuote(message: TgMessage, botId?: number): QuotedMessage | undefined {
+  const quoted = message.reply_to_message;
+  if (!quoted) return undefined;
+  const text = (quoted.text ?? quoted.caption ?? "").trim();
+  if (!text) return undefined;
+  const from = quoted.from;
+  const isBot = from ? from.is_bot || (botId !== undefined && from.id === botId) : false;
+  const fromName = isBot
+    ? "you (the assistant)"
+    : from?.username
+      ? `@${from.username}`
+      : from?.first_name || "the operator";
+  return { text: text.slice(0, 1000), fromName, isBot, messageId: quoted.message_id };
+}
+
+/** Render quoted context as a prompt prefix so the agent knows what "this" means. */
+export function quotePrefix(quote: QuotedMessage): string {
+  return quote.isBot
+    ? `[The operator replied to YOUR earlier message: "${quote.text}"]\n`
+    : `[The operator replied to ${quote.fromName}'s earlier message: "${quote.text}"]\n`;
 }
 
 export interface MediaAttachment {

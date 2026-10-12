@@ -9,6 +9,8 @@ export interface RunOpts {
   isNewSession: boolean;
   model?: string;
   agent: string;
+  /** Reasoning-effort variant (opencode --variant, e.g. "high"). */
+  variant?: string;
   autoApprove: boolean;
   timeoutMs: number;
   cwd: string;
@@ -22,6 +24,8 @@ export interface RunOpts {
   memory?: string;
   /** Directory holding MEMORY.md + daily notes (told to the agent). */
   memoryDir?: string;
+  /** Python venv with doc libs (told to the agent). */
+  agentVenv?: string;
   onProgress?: (note: string) => void;
 }
 
@@ -48,7 +52,14 @@ const OPS_SYSTEM_PREFIX = [
   "  any site that needs JS, login forms, or visual verification, exactly like a human would;",
   "  browser discipline: snapshot first to see what's on screen, prefer accessibility",
   "  references over coordinates, wait_for load/networkidle after navigation, screenshot",
-  "  to verify anything visual before claiming it works;",
+  "  to verify anything visual before claiming it works; YouTube/video sites work through",
+  "  the browser tools (search, read titles, open videos) — never claim blocked without trying;",
+  "- documents: create REAL .pptx presentations (python-pptx), .xlsx spreadsheets (openpyxl),",
+  "  and images/charts (pillow) using this preinstalled python venv:",
+  "  VENV_PYTHON: {{AGENT_VENV}}",
+  "  (if it ever goes missing, recreate: python3 -m venv <parent>/.agent-venv &&",
+  "  <parent>/.agent-venv/bin/pip install python-pptx openpyxl pillow). Write a python script,",
+  "  run it, verify the file opens (re-read/screenshot it), then deliver via OUTBOX/:::SEND;",
   "- system: check status, clean up, wire autostart/cron where asked.",
   "Working directory context is the workspace root unless told otherwise.",
   "Be resourceful: if one approach fails (missing tool, blocked site), try another",
@@ -114,6 +125,7 @@ export function runOpencode(opts: RunOpts): Promise<RunResult> {
   const startedAt = Date.now();
   const prefix = OPS_SYSTEM_PREFIX
     .replace("{{OUTBOX_DIR}}", opts.outboxDir ?? "(outbox not configured)")
+    .replace("{{AGENT_VENV}}", opts.agentVenv ?? "(venv not configured)")
     .replace("{{MEMORY_DIR}}", opts.memoryDir ?? "(memory not configured)")
     .replace(
       "{{MEMORY_CONTEXT}}",
@@ -126,6 +138,7 @@ export function runOpencode(opts: RunOpts): Promise<RunResult> {
   const args = ["run", "--format", "json"];
   if (opts.sessionId) args.push("--session", opts.sessionId);
   if (opts.model) args.push("--model", opts.model);
+  if (opts.variant) args.push("--variant", opts.variant);
   if (opts.agent) args.push("--agent", opts.agent);
   if (opts.autoApprove) args.push("--auto");
   if (opts.serverUrl) args.push("--attach", opts.serverUrl);

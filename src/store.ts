@@ -7,6 +7,8 @@ export interface ChatState {
   sessionId?: string;
   model?: string;
   agent?: string;
+  /** Reasoning-effort variant, e.g. "high" (passed as opencode --variant). */
+  effort?: string;
   /** Last /free or /models listing, so /model <number> can select from it. */
   modelList?: string[];
   /** Last /sessions listing, so /switch <number> can select from it. */

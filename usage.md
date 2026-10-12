@@ -19,12 +19,13 @@ cp .env.example .env   # then edit .env
 ```
 
 1. Talk to **@BotFather** on Telegram → `/newbot` → copy the token.
-2. (Recommended) Talk to **@userinfobot** → copy your numeric user ID.
+2. (Recommended) Get your numeric ID from **@userinfobot**, or just use your
+   `@username` — both work in the allowlist.
 3. Configure `.env` (minimum):
 
 ```bash
 TELEGRAM_BOT_TOKEN=<token from BotFather>
-TELEGRAM_ALLOWED_USERS=<your numeric id>
+TELEGRAM_ALLOWED_USERS=@your_username
 WORK_DIR=/path/where/the-agent/works
 ```
 
@@ -54,6 +55,9 @@ Just send messages. Examples:
 - `deploy the api-server and show me the logs`
 - `why is port 5000 not responding? fix it`
 - `go to example.com, log in, and screenshot the dashboard`
+- `search YouTube for lofi radio and tell me the top results`
+- `create a 5-slide presentation on our roadmap and send it`
+- `make a spreadsheet tracking expenses with totals and send it`
 - `remember that I prefer nemotron for coding`
 
 Replies are chunked to Telegram's limits automatically and end with a
@@ -76,6 +80,8 @@ Free-text questions are asked as `❓ … (Reply with your answer in chat.)` —
 | `/free` | Numbered list of **free** models (`👁` = sees images, plus context sizes). Reply with the **number** to select |
 | `/models [provider]` | Numbered list of models (optionally filtered by provider). Reply with the **number** |
 | `/model <number\|provider/model>` | Switch model for this chat (applies from next message). Bare `/model` shows current |
+| `/effort <minimal\|low\|medium\|high\|xhigh\|max>` | Reasoning effort for this chat (applies from next message). `/effort off` resets |
+| `/effort` | Show current effort + available levels for your model |
 | `/sessions` | Numbered list of recent opencode runs (current marked). Reply with the **number** to jump |
 | `/switch <number\|session-id>` | Continue a different session |
 | `/memory` | Show long-term memory (`MEMORY.md`) |
@@ -89,6 +95,12 @@ Free-text questions are asked as `❓ … (Reply with your answer in chat.)` —
 
 **Number picking:** after `/free`, `/models` or `/sessions`, just send the number
 (`2`) within ~3 minutes — no `/model` prefix needed.
+
+**Effort levels:** reasoning effort (`minimal → low → medium → high → xhigh → max`)
+trades speed for thinking depth. Available levels depend on the model — e.g.
+`muse-spark` offers up to `xhigh`, `space-bunny` up to `max`, while `nemotron`
+models have none. `/effort` shows exactly what your current model supports, and
+rejects levels it doesn't have. Higher effort = slower, more thorough answers.
 
 ---
 
@@ -163,7 +175,7 @@ mouse/keyboard control of GUI apps is out of scope — browser + shell cover it.
 | Var | Default | Purpose |
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | — (required) | Bot token from @BotFather |
-| `TELEGRAM_ALLOWED_USERS` | empty (= open!) | Numeric user IDs allowed (from @userinfobot) |
+| `TELEGRAM_ALLOWED_USERS` | empty (= open!) | Numeric IDs and/or `@usernames` allowed (IDs from @userinfobot) |
 | `WORK_DIR` | repo root's parent's parent | Directory the agent operates in |
 | `DATA_DIR` | `./data` | Sessions, memory, inbox/outbox, model cache |
 | `OUTBOX_DIR` | `$DATA_DIR/outbox` | Agent-to-you file delivery |

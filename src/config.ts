@@ -5,6 +5,8 @@ import path from "node:path";
 export interface BotConfig {
   token: string;
   allowedUsers: Set<number>;
+  /** Lowercase Telegram usernames (without @) allowed to use the bot. */
+  allowedUsernames: Set<string>;
   workDir: string;
   dataDir: string;
   outboxDir: string;
@@ -34,6 +36,15 @@ function parseAllowedUsers(raw: string | undefined): Set<number> {
   return set;
 }
 
+function parseAllowedUsernames(raw: string | undefined): Set<string> {
+  const set = new Set<string>();
+  for (const part of (raw ?? "").split(/[,\s]+/)) {
+    const name = part.trim().replace(/^@/, "").toLowerCase();
+    if (name && !/^\d+$/.test(name) && /^[a-z0-9_]{3,}$/.test(name)) set.add(name);
+  }
+  return set;
+}
+
 export function loadConfig(): BotConfig {
   const token = (process.env.TELEGRAM_BOT_TOKEN ?? "").trim();
   if (!token) {
@@ -55,6 +66,7 @@ export function loadConfig(): BotConfig {
   return {
     token,
     allowedUsers: parseAllowedUsers(process.env.TELEGRAM_ALLOWED_USERS),
+    allowedUsernames: parseAllowedUsernames(process.env.TELEGRAM_ALLOWED_USERS),
     workDir,
     dataDir,
     outboxDir,

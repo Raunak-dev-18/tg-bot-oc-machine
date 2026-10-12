@@ -12,6 +12,8 @@ export interface ModelInfo {
   vision: boolean;
   attachment: boolean;
   contextK?: number;
+  /** Reasoning-effort variants, e.g. ["minimal","low","medium","high","xhigh"]. */
+  variants: string[];
 }
 
 export interface SessionInfo {
@@ -66,6 +68,7 @@ export function parseVerboseModels(output: string): ModelInfo[] {
         cost?: { input?: number; output?: number };
         capabilities?: { attachment?: boolean; input?: { image?: boolean } };
         limit?: { context?: number };
+        variants?: Record<string, unknown>;
       };
       const free = (meta.cost?.input ?? -1) === 0 && (meta.cost?.output ?? -1) === 0;
       models.push({
@@ -76,9 +79,10 @@ export function parseVerboseModels(output: string): ModelInfo[] {
         attachment: meta.capabilities?.attachment === true,
         contextK:
           typeof meta.limit?.context === "number" ? Math.round(meta.limit.context / 1000) : undefined,
+        variants: meta.variants ? Object.keys(meta.variants) : [],
       });
     } catch {
-      models.push({ id: headerMatch[1], name: headerMatch[1], free: false, vision: false, attachment: false });
+      models.push({ id: headerMatch[1], name: headerMatch[1], free: false, vision: false, attachment: false, variants: [] });
     }
   }
   return models;

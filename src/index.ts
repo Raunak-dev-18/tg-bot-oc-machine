@@ -42,6 +42,9 @@ const HELP_TEXT = [
   "/models [provider] — list models, then reply with the number",
   "/model <number|provider/model> — switch model for this chat",
   "/model — show current model",
+  "/effort <minimal|low|medium|high|xhigh|max> — reasoning effort for this chat",
+  "/effort — show current effort + available levels for your model",
+  "/effort off — back to model default",
   "/sessions — list recent opencode sessions, then reply with the number",
   "/switch <number|session-id> — continue a different session",
   "/memory — show what the agent remembers about you",
@@ -90,10 +93,14 @@ async function main(): Promise<void> {
   process.env.XDG_CONFIG_HOME = botHome.dir;
   console.log(`[bot] opencode config home: ${botHome.dir}`);
 
-  if (config.allowedUsers.size === 0) {
+  if (config.allowedUsers.size === 0 && config.allowedUsernames.size === 0) {
     console.warn(
       "⚠️  SECURITY: TELEGRAM_ALLOWED_USERS is empty — ANY Telegram user who finds this bot can execute commands on this machine. " +
-        "Set TELEGRAM_ALLOWED_USERS=<your-numeric-id> to lock it down. Get your id via @userinfobot.",
+        "Set TELEGRAM_ALLOWED_USERS=<your-numeric-id or @username> to lock it down. Get your id via @userinfobot.",
+    );
+  } else {
+    console.log(
+      `[auth] whitelist: ids=[${[...config.allowedUsers].join(",")}] usernames=[${[...config.allowedUsernames].join(",")}]`,
     );
   }
   if (config.autoApprove) {
@@ -126,8 +133,11 @@ async function main(): Promise<void> {
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 
-  function isAllowed(fromId: number | undefined): boolean {
-    return config.allowedUsers.size === 0 || (fromId !== undefined && config.allowedUsers.has(fromId));
+  function isAllowed(fromId: number | undefined, username?: string): boolean {
+    if (config.allowedUsers.size === 0 && config.allowedUsernames.size === 0) return true;
+    if (fromId !== undefined && config.allowedUsers.has(fromId)) return true;
+    const name = (username ?? "").replace(/^@/, "").toLowerCase();
+    return !!name && config.allowedUsernames.has(name);
   }
 
   /** Files the agent dropped into the outbox during this run. */
@@ -212,6 +222,7 @@ async function main(): Promise<void> {
         isNewSession,
         model: state.model ?? config.model,
         agent: state.agent ?? config.agent,
+        variant: state.effort,
         autoApprove: config.autoApprove,
         timeoutMs: config.timeoutMs,
         cwd: config.workDir,
@@ -219,6 +230,7 @@ async function main(): Promise<void> {
         serverUrl: attachUrl,
         files,
         outboxDir: config.outboxDir,
+        agentVenv: path.join(config.dataDir, ".agent-venv", "bin", "python"),
         memoryDir: memPaths.dir,
         memory: isNewSession ? await loadMemoryContext(config.dataDir) : undefined,
         onProgress: (note) => {
@@ -311,6 +323,7 @@ async function main(): Promise<void> {
           `browser MCP: ${botHome.playwrightMcpCli ? "ready ✅" : "unavailable ⚠️"}`,
           `session: ${state.sessionId ?? "none yet"}`,
           `model override: ${state.model ?? config.model ?? "(opencode default)"}`,
+          `effort: ${state.effort ?? "(model default)"}`,
           `agent: ${state.agent ?? config.agent}`,
           `auto-approve: ${config.autoApprove ? "ON" : "OFF"}`,
           `memory: ${memSize} chars`,
@@ -395,6 +408,41 @@ async function main(): Promise<void> {
       }
       store.setChat(chatKey, { ...state, model: resolved });
       await api.sendMessage(chatId, `✅ Model set to ${resolved} for this chat (applies from your next message).`, replyTo);
+      return;
+    }
+
+    if (cmd === "/effort") {
+      const state = store.getChat(chatKey);
+      const effectiveModel = state.model ?? config.model;
+      const info = effectiveModel
+        ? await lookupModel({ bin: config.opencodeBin, cwd: config.workDir, dataDir: config.dataDir, id: effectiveModel })
+        : undefined;
+      const available = info?.variants ?? [];
+      if (!arg) {
+        await api.sendMessage(
+          chatId,
+          `Current effort: ${state.effort ?? "(model default)"}` +
+            (effectiveModel ? `\nModel: ${effectiveModel}` : "") +
+            (available.length > 0
+              ? `\nAvailable levels: ${available.join(", ")}\nSet with /effort <level> (applies from your next message).`
+              : `\nNo effort levels known for this model — try /effort high anyway, or pick a model from /free.`),
+          replyTo,
+        );
+        return;
+      }
+      const level = arg.toLowerCase();
+      if (["off", "default", "none", "auto"].includes(level)) {
+        store.setChat(chatKey, { ...state, effort: undefined });
+        await api.sendMessage(chatId, "✅ Effort cleared — back to model default.", replyTo);
+        return;
+      }
+      if (available.length > 0 && !available.map((v) => v.toLowerCase()).includes(level)) {
+        await api.sendMessage(chatId, `Unknown level "${arg}" for ${effectiveModel}. Available: ${available.join(", ")}`, replyTo);
+        return;
+      }
+      const canonical = available.find((v) => v.toLowerCase() === level) ?? arg;
+      store.setChat(chatKey, { ...state, effort: canonical });
+      await api.sendMessage(chatId, `✅ Effort set to ${canonical} for this chat (applies from your next message).`, replyTo);
       return;
     }
 
@@ -697,7 +745,7 @@ async function main(): Promise<void> {
       // Button taps answering agent questions.
       if (update.callback_query) {
         const cb = update.callback_query;
-        if (!isAllowed(cb.from?.id)) {
+        if (!isAllowed(cb.from?.id, cb.from?.username)) {
           await api.answerCallback(cb.id, "⛔ Unauthorized.");
           continue;
         }
@@ -721,7 +769,7 @@ async function main(): Promise<void> {
       const media = extractMedia(update);
       if (media) {
         const chatId = media.message.chat.id;
-        if (!isAllowed(media.message.from?.id)) {
+        if (!isAllowed(media.message.from?.id, media.message.from?.username)) {
           console.warn(`[auth] rejected media from user ${media.message.from?.id} in chat ${chatId}`);
           continue;
         }
@@ -736,7 +784,7 @@ async function main(): Promise<void> {
       const { message, text } = extracted;
       const chatId = message.chat.id;
 
-      if (!isAllowed(message.from?.id)) {
+      if (!isAllowed(message.from?.id, message.from?.username)) {
         console.warn(`[auth] rejected message from user ${message.from?.id} in chat ${chatId}`);
         try {
           await api.sendMessage(chatId, "⛔ Unauthorized. This bot is restricted.", message.message_id);
@@ -748,6 +796,9 @@ async function main(): Promise<void> {
 
       void handleMessage(chatId, message.message_id, text).catch((err) =>
         console.error(`[msg] ${(err as Error).message}`),
+      );
+      console.log(
+        `[msg] chat ${chatId} from user ${message.from?.id}${message.from?.username ? ` (@${message.from.username})` : ""}: ${text.slice(0, 80)}`,
       );
     }
   }

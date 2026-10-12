@@ -155,6 +155,74 @@ export async function listSessions(opts: { bin: string; cwd: string }): Promise<
   return parseSessionList(output);
 }
 
+export interface RecallHit {
+  sessionId: string;
+  title: string;
+  role: string;
+  snippet: string;
+}
+
+/** Export one session's transcript (JSON). Throws on timeout/corrupt output. */
+export async function exportSession(opts: { bin: string; cwd: string; id: string }): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    execFile(opts.bin, ["export", opts.id], { cwd: opts.cwd, timeout: 25_000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) {
+        reject(new Error(`export failed: ${(stderr as string)?.trim().slice(0, 200) || (err as Error).message}`));
+        return;
+      }
+      try {
+        resolve(JSON.parse(stdout as string));
+      } catch {
+        reject(new Error("export returned corrupt JSON"));
+      }
+    });
+  });
+}
+
+/**
+ * Cross-session recall (hermes-style): search recent transcripts for keywords.
+ * Returns hits with snippets; skips sessions that fail to export.
+ */
+export async function recallSessions(opts: {
+  bin: string;
+  cwd: string;
+  query: string;
+  limit?: number;
+}): Promise<{ hits: RecallHit[]; searched: number; skipped: number }> {
+  const words = opts.query.toLowerCase().split(/\s+/).filter((w) => w.length > 1);
+  if (words.length === 0) return { hits: [], searched: 0, skipped: 0 };
+  const sessions = (await listSessions({ bin: opts.bin, cwd: opts.cwd })).slice(0, opts.limit ?? 6);
+  const hits: RecallHit[] = [];
+  let searched = 0;
+  let skipped = 0;
+  for (const session of sessions) {
+    let data: { messages?: { info?: { role?: string }; parts?: { type?: string; text?: string }[] }[] };
+    try {
+      data = (await exportSession({ bin: opts.bin, cwd: opts.cwd, id: session.id })) as typeof data;
+      searched++;
+    } catch {
+      skipped++;
+      continue;
+    }
+    let perSession = 0;
+    for (const msg of data.messages ?? []) {
+      if (perSession >= 2) break;
+      const role = msg.info?.role ?? "?";
+      const texts = (msg.parts ?? []).filter((p) => p.type === "text" && p.text).map((p) => p.text as string);
+      const combined = texts.join("\n");
+      const lower = combined.toLowerCase();
+      if (!combined.trim() || !words.every((w) => lower.includes(w))) continue;
+      const first = words.map((w) => lower.indexOf(w)).filter((i) => i >= 0).sort((a, b) => a - b)[0] ?? 0;
+      const snippet = combined.slice(Math.max(0, first - 120), first + 200).replace(/\s+/g, " ").trim();
+      hits.push({ sessionId: session.id, title: session.title, role, snippet: snippet.slice(0, 300) });
+      perSession++;
+      if (hits.length >= 8) break;
+    }
+    if (hits.length >= 8) break;
+  }
+  return { hits, searched, skipped };
+}
+
 /** Look up one model id in cached verbose data (opencode provider only). */
 export async function lookupModel(opts: {
   bin: string;

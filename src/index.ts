@@ -3,6 +3,7 @@
 // via `opencode run -f`; agent questions (:::ASK blocks) render as buttons.
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { statSync } from "node:fs";
 import { mkdir, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { ensureBotConfigHome } from "./botconfig.js";
@@ -10,7 +11,8 @@ import { computeNext, describeSpec, formatNext, parseSpec } from "./cron.js";
 import { loadConfig } from "./config.js";
 import { PendingQuestions, parseAskBlocks, parseSendBlocks, stripAskBlocks, stripSendBlocks } from "./interact.js";
 import { loadMemoryContext, memoryPaths, readMemoryFile, rememberFact } from "./memory.js";
-import { getVerboseModels, listPlainModels, listSessions, lookupModel } from "./models.js";
+import { getVerboseModels, listPlainModels, listSessions, lookupModel, recallSessions } from "./models.js";
+import { loadSkills, skillsCatalog } from "./skills.js";
 import { runOpencode } from "./opencode.js";
 import { ensureServe, isServeHealthy } from "./serve.js";
 import { Store } from "./store.js";
@@ -49,6 +51,9 @@ const HELP_TEXT = [
   "/switch <number|session-id> — continue a different session",
   "/memory — show what the agent remembers about you",
   "/remember <fact> — save something to long-term memory",
+  "/recall <keywords> — search past sessions for context",
+  "/skills — list installed agent skills",
+  "/parallel <t1> ;; <t2> [;; t3] — run up to 3 tasks concurrently",
   "/shot <url> [note] — open a page in the agent browser, screenshot to chat",
   "/send <absolute-path> [caption] — send any machine file to chat instantly",
   "/cron <every 30m|every 2h|daily 09:30> <task> — run a task on schedule",
@@ -84,6 +89,21 @@ async function main(): Promise<void> {
   await mkdir(config.outboxDir, { recursive: true });
   await mkdir(memoryPaths(config.dataDir).dir, { recursive: true });
   const pending = new PendingQuestions();
+
+  // Drop-in skills (hermes/openclaw style): catalog injected into fresh sessions.
+  const skillsDir =
+    process.env.SKILLS_DIR ??
+    [path.join(process.cwd(), "skills"), path.join(config.dataDir, "..", "skills")].find((d) => {
+      try {
+        return statSync(d).isDirectory();
+      } catch {
+        return false;
+      }
+    }) ??
+    path.join(process.cwd(), "skills");
+  const skills = await loadSkills(skillsDir);
+  const skillsText = skillsCatalog(skills, skillsDir);
+  console.log(`[bot] skills: ${skills.length ? skills.map((s) => s.name).join(", ") : "none"} (${skillsDir})`);
 
   // Isolated opencode config (browser MCP etc.) — applies to serve + runs below.
   const botHome = await ensureBotConfigHome({
@@ -266,6 +286,8 @@ async function main(): Promise<void> {
         files,
         outboxDir: config.outboxDir,
         agentVenv: path.join(config.dataDir, ".agent-venv", "bin", "python"),
+        // Skills catalog is small — inject every turn so ongoing sessions keep it.
+        skills: skillsText,
         memoryDir: memPaths.dir,
         memory: isNewSession ? await loadMemoryContext(config.dataDir) : undefined,
         onProgress: (note) => {
@@ -652,6 +674,103 @@ async function main(): Promise<void> {
         return;
       }
       await api.sendMessage(chatId, `🗑️ Deleted scheduled task ${target}.`, replyTo);
+      return;
+    }
+
+    if (cmd === "/skills") {
+      if (skills.length === 0) {
+        await api.sendMessage(chatId, "No skills installed.", replyTo);
+        return;
+      }
+      const lines = skills.map((s) => `• ${s.name} — ${s.description}`);
+      await api.sendChunked(chatId, `🛠️ Installed skills:\n${lines.join("\n")}\n\nThe agent reads the full guide when a task matches. Drop new ones in skills/<name>/SKILL.md and restart me.`, replyTo);
+      return;
+    }
+
+    if (cmd === "/recall") {
+      if (!arg) {
+        await api.sendMessage(chatId, "Usage: /recall <keywords> — searches recent session transcripts.", replyTo);
+        return;
+      }
+      await api.sendChatAction(chatId, "typing");
+      try {
+        const { hits, searched, skipped } = await recallSessions({ bin: config.opencodeBin, cwd: config.workDir, query: arg, limit: 8 });
+        if (hits.length === 0) {
+          await api.sendMessage(chatId, `🔍 No matches for “${arg}” in ${searched} recent session(s)${skipped ? ` (${skipped} skipped)` : ""}.`, replyTo);
+          return;
+        }
+        const lines = hits.map((h) => `📄 ${h.title} [${h.role}]\n${h.snippet}\n   (${h.sessionId})`);
+        await api.sendChunked(chatId, `🔍 Recall “${arg}” — ${hits.length} hit(s) in ${searched} session(s):\n\n${lines.join("\n\n")}`, replyTo);
+      } catch (err) {
+        await api.sendMessage(chatId, `❌ Recall failed: ${(err as Error).message.slice(0, 500)}`, replyTo);
+      }
+      return;
+    }
+
+    if (cmd === "/parallel") {
+      const tasks = arg.split(";;").map((t) => t.trim()).filter(Boolean).slice(0, 3);
+      if (tasks.length < 2) {
+        await api.sendMessage(chatId, "Usage: /parallel <task 1> ;; <task 2> [;; <task 3>]\nRuns up to 3 tasks concurrently in fresh sessions.", replyTo);
+        return;
+      }
+      if (busyChats.has(chatId)) {
+        await api.sendMessage(chatId, "⏳ Still working on the previous request — please wait.", replyTo);
+        return;
+      }
+      busyChats.add(chatId);
+      const typingTimer = setInterval(() => void api.sendChatAction(chatId, "typing"), 4000);
+      try {
+        await refreshServe();
+        await api.sendMessage(chatId, `🔀 Running ${tasks.length} tasks in parallel…`, replyTo);
+        const chatState = store.getChat(chatKey);
+        const mem = await loadMemoryContext(config.dataDir);
+        const memPaths = memoryPaths(config.dataDir);
+        const outboxBefore = new Set<string>(await readdir(config.outboxDir).catch(() => [] as string[]));
+        const results = await Promise.all(
+          tasks.map((task, i) =>
+            runOpencode({
+              prompt: `[Parallel task ${i + 1}/${tasks.length}: ${task}]\n${task}`,
+              sessionId: undefined,
+              isNewSession: true,
+              model: chatState.model ?? config.model,
+              agent: chatState.agent ?? config.agent,
+              variant: chatState.effort,
+              autoApprove: config.autoApprove,
+              timeoutMs: config.timeoutMs,
+              cwd: config.workDir,
+              bin: config.opencodeBin,
+              serverUrl: attachUrl,
+              outboxDir: config.outboxDir,
+              agentVenv: path.join(config.dataDir, ".agent-venv", "bin", "python"),
+              memoryDir: memPaths.dir,
+              memory: mem,
+              skills: skillsText,
+            }).then(
+              (result) => ({ ok: true as const, i, task, result }),
+              (err: unknown) => ({ ok: false as const, i, task, error: (err as Error).message }),
+            ),
+          ),
+        );
+        const sentPaths = new Set<string>();
+        for (const r of results) {
+          if (!r.ok) {
+            await api.sendMessage(chatId, `🔀 Task ${r.i + 1}/${tasks.length}: ${r.task}\n❌ ${r.error.slice(0, 1000)}`);
+            continue;
+          }
+          const questions = parseAskBlocks(r.result.text);
+          const sends = parseSendBlocks(r.result.text);
+          let body = stripSendBlocks(stripAskBlocks(r.result.text));
+          for (const q of questions) {
+            body += `\n\n❓ ${q.question}${q.options.length > 0 ? ` (options: ${q.options.join(" / ")})` : " (reply to answer)"}`;
+          }
+          await api.sendChunked(chatId, `🔀 Task ${r.i + 1}/${tasks.length}: ${r.task}\n\n${body}`);
+          for (const s of await deliverSendFiles(chatId, sends)) sentPaths.add(s);
+        }
+        await deliverOutbox(chatId, await collectOutbox(outboxBefore), sentPaths);
+      } finally {
+        clearInterval(typingTimer);
+        busyChats.delete(chatId);
+      }
       return;
     }
 

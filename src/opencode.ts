@@ -26,6 +26,8 @@ export interface RunOpts {
   memoryDir?: string;
   /** Python venv with doc libs (told to the agent). */
   agentVenv?: string;
+  /** Skill catalog text (told to the agent in fresh sessions). */
+  skills?: string;
   onProgress?: (note: string) => void;
 }
 
@@ -84,6 +86,8 @@ const OPS_SYSTEM_PREFIX = [
   ":::SEND",
   "/absolute/path/to/file.png | optional caption",
   ":::",
+  "Drop-in skills (hermes/openclaw style) — check this catalog on every task:",
+  "{{SKILLS}}",
   "Memory — you have persistent memory across sessions (hermes/openclaw style):",
   "MEMORY_DIR: {{MEMORY_DIR}}",
   "- MEMORY.md holds durable facts: operator preferences, project decisions, credentials",
@@ -130,6 +134,7 @@ export function runOpencode(opts: RunOpts): Promise<RunResult> {
   const prefix = OPS_SYSTEM_PREFIX
     .replace("{{OUTBOX_DIR}}", opts.outboxDir ?? "(outbox not configured)")
     .replace("{{AGENT_VENV}}", opts.agentVenv ?? "(venv not configured)")
+    .replace("{{SKILLS}}", opts.skills ?? "(no skills configured)")
     .replace("{{MEMORY_DIR}}", opts.memoryDir ?? "(memory not configured)")
     .replace(
       "{{MEMORY_CONTEXT}}",

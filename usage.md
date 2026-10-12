@@ -86,6 +86,9 @@ Free-text questions are asked as `❓ … (Reply with your answer in chat.)` —
 | `/switch <number\|session-id>` | Continue a different session |
 | `/memory` | Show long-term memory (`MEMORY.md`) |
 | `/remember <fact>` | Save a fact to long-term memory (or just say “remember …”) |
+| `/recall <keywords>` | Search recent session transcripts for context |
+| `/skills` | List installed agent skills |
+| `/parallel <t1> ;; <t2> [;; t3]` | Run up to 3 tasks concurrently in fresh sessions |
 | `/shot <https-url> [note]` | Open a page in the agent browser, screenshot it straight to chat |
 | `/send <absolute-path> [caption]` | Send any machine file to chat instantly, no AI round-trip |
 | `/cron <every 30m\|every 2h\|daily 09:30> <task>` | Run a task on schedule, delivered to this chat |
@@ -96,6 +99,17 @@ Free-text questions are asked as `❓ … (Reply with your answer in chat.)` —
 
 **Number picking:** after `/free`, `/models` or `/sessions`, just send the number
 (`2`) within ~3 minutes — no `/model` prefix needed.
+
+### Skills, recall & parallel runs
+
+- **Skills** (`skills/<name>/SKILL.md`, `name:` + `description:` frontmatter, agentskills.io
+  style) are injected into every session; the agent reads the full guide when a task
+  matches. Shipped: `presentations`, `spreadsheets`, `browser-mission`, `deploy-app`,
+  `memory-keeper`. List with `/skills`; add your own and restart the bot.
+- **Recall** — `/recall <keywords>` searches the 8 most recent session transcripts
+  (via `opencode export`) and returns title + snippet hits. Your past work stays findable.
+- **Parallel** — `/parallel <task 1> ;; <task 2> [;; <task 3>]` runs up to 3 tasks
+  concurrently in fresh sessions (main session untouched), results labeled per task.
 
 **Effort levels:** reasoning effort (`minimal → low → medium → high → xhigh → max`)
 trades speed for thinking depth. Available levels depend on the model — e.g.
@@ -206,7 +220,8 @@ mouse/keyboard control of GUI apps is out of scope — browser + shell cover it.
 - `src/interact.ts` — `:::ASK` (questions → buttons) and `:::SEND` (explicit media)
   block parsers + pending-answer registry for button taps.
 - `src/models.ts` — parses `opencode models --verbose` (free = zero cost, vision flags,
-  6 h cache) and `opencode session list`.
+  effort variants, 6 h cache), `opencode session list`, and `opencode export` for
+  `/recall` cross-session search.
 - `src/serve.ts` — keeps background `opencode serve` healthy (`/global/health`).
 - `src/botconfig.ts` — generates the isolated opencode home with the Playwright MCP.
 - `src/store.ts` — per-chat session/model/selections + polling offset + cron jobs
@@ -214,7 +229,7 @@ mouse/keyboard control of GUI apps is out of scope — browser + shell cover it.
 - `src/memory.ts` — `MEMORY.md` + daily notes load/append with injection budgets.
 - `src/cron.ts` — `every Nm|Nh` / `daily HH:MM` spec parsing and next-run math.
 - `src/index.ts` — polling loop, command routing, media pipeline, outbox/SEND delivery,
-  bare-number selection, 20 s cron tick.
+  bare-number selection, 20 s cron tick, `/parallel` fan-out.
 
 `npm run typecheck` → `tsc`, `npm run build` → esbuild bundle to `dist/index.mjs`.
 

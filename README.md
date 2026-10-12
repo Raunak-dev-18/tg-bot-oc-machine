@@ -7,7 +7,7 @@ run shell, manage files, clone repos, deploy/start/stop apps, read logs.
 
 Zero runtime dependencies (plus `@playwright/mcp` for browser automation).
 TypeScript source, bundled to a single file with esbuild.
-Full instructions: **[usage.md](./usage.md)**.
+Full instructions: **[usage.md](./usage.md)** · Setup & operations: **[AGENTS.md](./AGENTS.md)**.
 
 ## Features
 

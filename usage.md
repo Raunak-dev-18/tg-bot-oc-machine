@@ -70,9 +70,11 @@ Free-text questions are asked as `❓ … (Reply with your answer in chat.)` —
 
 **Reactions, both ways.** React to any bot reply (👍 ❤️ 👎 …) — the update reaches the
 agent with the original message attached: praise gets a brief thanks + a memory note,
-criticism gets an apology and an offer to fix. The bot also reacts to *your* messages:
-👀 while working, 👍 when done, 👎 on failure. (Only Telegram-native reaction emoji
-work — e.g. ✅/❌ are rejected by the API.)
+criticism gets an apology and an offer to fix. The bot reacts back with **whatever the
+agent feels**: every reply ends in a `REACT: <emoji>` line the agent chooses itself
+(🔥 pride, 😅 relief, 🎉 celebration, 😔 apology…), attached to your message, plus
+👀 while working and 👎 on failure. (Only Telegram-native reaction emoji work —
+e.g. ✅/❌ are rejected by the API, and anything invalid is skipped silently.)
 
 ---
 

@@ -9,7 +9,7 @@ import path from "node:path";
 import { ensureBotConfigHome } from "./botconfig.js";
 import { computeNext, describeSpec, formatNext, parseSpec } from "./cron.js";
 import { loadConfig } from "./config.js";
-import { PendingQuestions, parseAskBlocks, parseSendBlocks, stripAskBlocks, stripSendBlocks } from "./interact.js";
+import { PendingQuestions, parseAskBlocks, parseReactLine, parseSendBlocks, stripAskBlocks, stripSendBlocks } from "./interact.js";
 import { loadMemoryContext, memoryPaths, readMemoryFile, rememberFact } from "./memory.js";
 import { getVerboseModels, listPlainModels, listSessions, lookupModel, recallSessions } from "./models.js";
 import { loadSkills, skillsCatalog } from "./skills.js";
@@ -34,7 +34,7 @@ const HELP_TEXT = [
   "install things, run and deploy apps. Files it produces (screenshots,",
   "reports) are delivered back here automatically.",
   "When the agent needs a decision, you'll get tappable option buttons.",
-  "React to my replies (👍/👎…) — I notice and learn. I react 👀→👍 on your tasks.",
+  "React to my replies (👍/👎…) — I notice and learn. I react with what I feel.",
   "",
   "Commands:",
   "/start — welcome + status",
@@ -309,9 +309,10 @@ async function main(): Promise<void> {
       const secs = Math.round((Date.now() - t0) / 1000);
       console.log(`[opencode] chat ${chatId}: done in ${secs}s, session ${result.sessionId ?? "?"}, ${result.text.length} chars`);
 
-      const questions = parseAskBlocks(result.text);
-      const sends = parseSendBlocks(result.text);
-      const body = stripSendBlocks(stripAskBlocks(result.text));
+      const reacted = parseReactLine(result.text);
+      const questions = parseAskBlocks(reacted.cleaned);
+      const sends = parseSendBlocks(reacted.cleaned);
+      const body = stripSendBlocks(stripAskBlocks(reacted.cleaned));
       const footer =
         result.tokens || result.cost !== undefined
           ? `\n\n— done in ${secs}s${result.tokens ? ` · tokens ${result.tokens.input}in/${result.tokens.output}out` : ""}${result.cost !== undefined ? ` · $${result.cost.toFixed(4)}` : ""}`
@@ -334,7 +335,7 @@ async function main(): Promise<void> {
         }
       }
       if (questions.length > 0 && !body) await api.sendMessage(chatId, footer.trim());
-      if (reactTo !== undefined) await api.react(chatId, reactTo, "👍");
+      if (reactTo !== undefined) await api.react(chatId, reactTo, reacted.emoji ?? "👍");
     } catch (err) {
       console.error(`[opencode] chat ${chatId}: FAILED ${(err as Error).message.slice(0, 300)}`);
       if (reactTo !== undefined) await api.react(chatId, reactTo, "👎");
@@ -765,14 +766,17 @@ async function main(): Promise<void> {
           ),
         );
         const sentPaths = new Set<string>();
+        let lastEmoji: string | undefined;
         for (const r of results) {
           if (!r.ok) {
             await api.sendMessage(chatId, `🔀 Task ${r.i + 1}/${tasks.length}: ${r.task}\n❌ ${r.error.slice(0, 1000)}`);
             continue;
           }
-          const questions = parseAskBlocks(r.result.text);
-          const sends = parseSendBlocks(r.result.text);
-          let body = stripSendBlocks(stripAskBlocks(r.result.text));
+          const reacted = parseReactLine(r.result.text);
+          if (reacted.emoji) lastEmoji = reacted.emoji;
+          const questions = parseAskBlocks(reacted.cleaned);
+          const sends = parseSendBlocks(reacted.cleaned);
+          let body = stripSendBlocks(stripAskBlocks(reacted.cleaned));
           for (const q of questions) {
             body += `\n\n❓ ${q.question}${q.options.length > 0 ? ` (options: ${q.options.join(" / ")})` : " (reply to answer)"}`;
           }
@@ -780,7 +784,7 @@ async function main(): Promise<void> {
           for (const s of await deliverSendFiles(chatId, sends)) sentPaths.add(s);
         }
         await deliverOutbox(chatId, await collectOutbox(outboxBefore), sentPaths);
-        await api.react(chatId, replyTo, "👍");
+        await api.react(chatId, replyTo, lastEmoji ?? "👍");
       } finally {
         clearInterval(typingTimer);
         busyChats.delete(chatId);

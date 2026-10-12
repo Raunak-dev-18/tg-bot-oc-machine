@@ -81,6 +81,26 @@ export function stripSendBlocks(text: string): string {
   return text.replace(SEND_RE, "").replace(/\n{3,}/g, "\n\n").trim();
 }
 
+/**
+ * AI-chosen reaction. The agent ends its reply with a final line:
+ *   REACT: 🔥
+ * Only the LAST non-empty line counts. Returns the emoji + cleaned text.
+ * (Telegram only accepts its native reaction set — invalid ones are
+ * rejected by the API call, which fails silently by design.)
+ */
+export function parseReactLine(text: string): { emoji?: string; cleaned: string } {
+  const lines = text.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].trim()) continue;
+    const match = /^REACT:\s*(\S+)\s*$/.exec(lines[i].trim());
+    if (!match) return { cleaned: text };
+    const emoji = match[1].slice(0, 16);
+    lines.splice(i, 1);
+    return { emoji, cleaned: lines.join("\n").replace(/\n{3,}/g, "\n\n").trim() };
+  }
+  return { cleaned: text };
+}
+
 export interface PendingAnswer {
   chatId: number;
   sessionId?: string;

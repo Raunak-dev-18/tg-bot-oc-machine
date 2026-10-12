@@ -18,7 +18,7 @@ Full instructions: **[usage.md](./usage.md)**.
 - 🌐 **Browser automation** — headless Chromium via Playwright MCP, `/shot <url>` screenshots
 - 🆓 **Free-model browser** — `/free` lists free models with vision (👁) markers; reply with the number to switch
 - 📚 **Session browser** — `/sessions` shows last 10 by title; reply with the number to jump
-- 👍 **Two-way reactions** — react to bot replies (it learns); it reacts 👀→👍 on your tasks
+- 👍 **Two-way reactions** — react to bot replies (it learns); it reacts with what it feels
 - ⏰ **Scheduled tasks** — `/cron every 30m …`, `/crons`, `/uncron`
 - 🛠️ **Skills** — drop-in `SKILL.md` guides (`/skills`); **recall** past sessions (`/recall`); **parallel** runs (`/parallel a ;; b`)
 - 📤 **Direct sends** — `/send <path>` pushes any machine file to chat instantly

@@ -65,6 +65,21 @@ agent sees exactly what you mean (`[The operator replied to YOUR earlier message
 is prepended to your prompt, capped at 1000 chars, works for photos/files too). "Change
 this one" finally understands what "this" is.
 
+### Voice-to-voice (Sarvam AI, multilingual)
+
+Requires `SARVAM_API_KEY` where the bot runs (dashboard.sarvam.ai). Then:
+
+1. You send a voice note (any of 22 Indic languages + English, Hinglish included).
+2. Sarvam transcribes with auto language detect; the transcript + language go to the agent.
+3. The agent replies in chat (full pipeline: buttons, files, memory) **and** speaks a short
+   version back as a voice note in the same language (opus → Telegram voice, mp3 fallback).
+4. Spoken replies stay under ~600 chars by instruction; longer answers chunk to ≤2 notes.
+
+- `/voice hi` forces Hindi always, `/voice en` English, `/voice auto` follows each note,
+  `/voice off` keeps text-only (still transcribes). `/say <text>` speaks anything.
+- TTS: `bulbul:v2` default speaker (override via `SARVAM_TTS_MODEL` / `SARVAM_VOICE`),
+  3500 chars/call, paced/naturalized for pronunciation.
+
 Replies are chunked to Telegram's limits automatically and end with a
 `— done in Xs · tokens …` footer. While it works you'll see the typing indicator
 plus a live bubble: `⏳ Working…` with elapsed time and current activity, which turns
@@ -113,6 +128,9 @@ e.g. ✅/❌ are rejected by the API, and anything invalid is skipped silently.)
 | `/parallel <t1> ;; <t2> [;; t3]` | Run up to 3 tasks concurrently in fresh sessions |
 | `/shot <https-url> [note]` | Open a page in the agent browser, screenshot it straight to chat |
 | `/send <absolute-path> [caption]` | Send any machine file to chat instantly, no AI round-trip |
+| 🎤 voice note | Transcribed (auto language) → text reply + spoken reply |
+| `/voice [hi\|en\|auto\|off]` | Voice reply language (default follows each note) |
+| `/say <text>` | Speak any text as a voice note |
 | `/cron <every 30m\|every 2h\|daily 09:30> <task>` | Run a task on schedule, delivered to this chat |
 | `/crons` | List scheduled tasks |
 | `/uncron <number\|id>` | Delete a scheduled task |

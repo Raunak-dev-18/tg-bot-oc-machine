@@ -23,10 +23,12 @@ import {
   extractMedia,
   extractQuote,
   extractText,
+  extractVoice,
   quotePrefix,
   type QuotedMessage,
   type ReplyMarkup,
 } from "./telegram.js";
+import { Sarvam, chunkForSpeech, cleanForSpeech, langLabel, mapToTtsLang } from "./voice.js";
 
 const HELP_TEXT = [
   "🤖 Remote machine control via opencode",
@@ -65,6 +67,9 @@ const HELP_TEXT = [
   "/jobs — list running tasks (survive bot restarts)",
   "/shot <url> [note] — open a page in the agent browser, screenshot to chat",
   "/send <absolute-path> [caption] — send any machine file to chat instantly",
+  "🎤 Send a voice note — transcribed, answered by text + voice (needs SARVAM_API_KEY)",
+  "/voice [hi|en|auto|off] — voice reply language (default auto-detect)",
+  "/say <text> — speak any text as a voice note",
   "/cron <every 30m|every 2h|daily 09:30> <task> — run a task on schedule",
   "/crons — list scheduled tasks",
   "/uncron <number|id> — delete a scheduled task",
@@ -123,6 +128,11 @@ async function main(): Promise<void> {
   process.env.XDG_CONFIG_HOME = botHome.dir;
   console.log(`[bot] opencode config home: ${botHome.dir}`);
 
+  if (config.sarvamKey) {
+    console.log(`[bot] voice: enabled (Sarvam STT+TTS, model ${config.sarvamTtsModel})`);
+  } else {
+    console.log("[bot] voice: disabled (set SARVAM_API_KEY to enable voice notes)");
+  }
   if (config.allowedUsers.size === 0 && config.allowedUsernames.size === 0) {
     console.warn(
       "⚠️  SECURITY: TELEGRAM_ALLOWED_USERS is empty — ANY Telegram user who finds this bot can execute commands on this machine. " +
@@ -302,6 +312,25 @@ async function main(): Promise<void> {
       } catch (err) {
         console.error(`[outbox] failed to send ${name}: ${(err as Error).message}`);
       }
+    }
+  }
+
+  /** Synthesize one speech chunk and send it (opus voice note, mp3 fallback). */
+  async function sendVoiceChunk(
+    chatId: number,
+    sarvam: Sarvam,
+    text: string,
+    ttsLang: string,
+    replyTo?: number,
+  ): Promise<void> {
+    try {
+      const opus = await sarvam.synthesize(text, ttsLang, "opus");
+      await api.sendVoiceData(chatId, opus.audio, `reply-${Date.now()}.ogg`, "audio/ogg", undefined, replyTo);
+    } catch (err) {
+      // Sarvam-side errors (key/quota/text) won't heal by retrying as mp3.
+      if ((err as Error).message.startsWith("Sarvam ")) throw err;
+      const mp3 = await sarvam.synthesize(text, ttsLang, "mp3");
+      await api.sendVoiceData(chatId, mp3.audio, `reply-${Date.now()}.mp3`, "audio/mpeg", undefined, replyTo);
     }
   }
 
@@ -514,11 +543,11 @@ async function main(): Promise<void> {
     files?: string[],
     reactTo?: number,
     opts?: { background?: boolean; jobId?: string; maxChunks?: number },
-  ): Promise<void> {
+  ): Promise<string> {
     const background = opts?.background ?? false;
     if (!background && busyChats.has(chatId)) {
       await api.sendMessage(chatId, "⏳ Still working on the previous request — please wait.", replyTo);
-      return;
+      return "";
     }
     if (!background) busyChats.add(chatId);
     const status = makeStatus(chatId, replyTo);
@@ -623,6 +652,7 @@ async function main(): Promise<void> {
       }
       if (questions.length > 0 && !body) await api.sendMessage(chatId, footer.trim());
       if (reactTo !== undefined) await api.react(chatId, reactTo, reacted.emoji ?? "👍");
+      return result.text;
     } catch (err) {
       if (err instanceof CancelledError) {
         console.log(`[opencode] chat ${chatId}: stopped by operator`);
@@ -640,6 +670,7 @@ async function main(): Promise<void> {
           /* chat may be gone; already logged */
         }
       }
+      return "";
     } finally {
       clearInterval(typingTimer);
       if (statusTick) clearInterval(statusTick);
@@ -1154,6 +1185,72 @@ async function main(): Promise<void> {
       return;
     }
 
+    if (cmd === "/voice") {
+      const state = store.getChat(chatKey);
+      const current = state.voiceLang ?? "auto";
+      if (!arg) {
+        await api.sendMessage(
+          chatId,
+          `🎤 Voice replies: ${!config.sarvamKey ? "UNAVAILABLE (no SARVAM_API_KEY)" : current === "off" ? "OFF" : `ON, language ${current}`} ` +
+            `(speaker: ${config.sarvamSpeaker ?? "default"} · model ${config.sarvamTtsModel})\n` +
+            "Usage: /voice <hi|en|hinglish…|auto|off> — e.g. /voice hi for Hindi always.",
+          replyTo,
+        );
+        return;
+      }
+      const norm = arg.toLowerCase();
+      const next =
+        norm === "off" ? "off"
+        : norm === "on" || norm === "auto" ? "auto"
+        : norm === "hindi" ? "hi-IN"
+        : norm === "english" ? "en-IN"
+        : norm === "hinglish" ? "hi-IN"
+        : /^[a-z]{2}(-[a-z]{2})?$/.test(norm) && norm.includes("-") ? norm.split("-")[0] + "-" + norm.split("-")[1].toUpperCase()
+        : /^[a-z]{2,3}$/.test(norm) ? `${norm}-IN`
+        : null;
+      if (!next) {
+        await api.sendMessage(chatId, `Unknown language "${arg}". Try /voice hi, /voice en, /voice auto, /voice off.`, replyTo);
+        return;
+      }
+      store.setChat(chatKey, { ...state, voiceLang: next });
+      const mapped = next === "auto" || next === "off" ? next : mapToTtsLang(next);
+      await api.sendMessage(
+        chatId,
+        next === "off"
+          ? "🔇 Voice replies off — I'll answer voice notes with text only."
+          : `✅ Voice replies ${next === "auto" ? "follow each note's language" : `always in ${langLabel(next)}`} (voice: ${mapped}).`,
+        replyTo,
+      );
+      return;
+    }
+
+    if (cmd === "/say") {
+      if (!config.sarvamKey) {
+        await api.sendMessage(chatId, "🎤 Voice needs SARVAM_API_KEY set where the bot runs.", replyTo);
+        return;
+      }
+      if (!arg) {
+        await api.sendMessage(chatId, "Usage: /say <text to speak>", replyTo);
+        return;
+      }
+      const state = store.getChat(chatKey);
+      const langPref = state.voiceLang && state.voiceLang !== "auto" && state.voiceLang !== "off" ? state.voiceLang : "en-IN";
+      const ttsLang = mapToTtsLang(langPref);
+      await api.sendChatAction(chatId, "record_voice");
+      try {
+        const sarvam = new Sarvam(config.sarvamKey, config.sarvamTtsModel, config.sarvamSpeaker);
+        const chunks = chunkForSpeech(arg, 900, 2);
+        let target: number | undefined = replyTo;
+        for (const chunk of chunks) {
+          await sendVoiceChunk(chatId, sarvam, chunk, ttsLang, target);
+          target = undefined;
+        }
+      } catch (err) {
+        await api.sendMessage(chatId, `❌ Speech failed: ${(err as Error).message.slice(0, 500)}`, replyTo);
+      }
+      return;
+    }
+
     if (cmd === "/agent") {
       const state = store.getChat(chatKey);
       if (!arg) {
@@ -1211,6 +1308,54 @@ async function main(): Promise<void> {
 
     // Default: forward to opencode (the AI brain), with quoted context if replying.
     await forwardToOpencode(chatId, replyTo, quote ? `${quotePrefix(quote)}\n${text}` : text, undefined, replyTo);
+  }
+
+  async function handleVoice(chatId: number, replyTo: number, fileId: string, duration: number, fileSize?: number, quote?: QuotedMessage): Promise<void> {
+    if (!config.sarvamKey) {
+      await api.sendMessage(chatId, "🎤 Voice notes need SARVAM_API_KEY set where the bot runs. Send text meanwhile.", replyTo);
+      return;
+    }
+    if (fileSize !== undefined && fileSize > MAX_TG_FILE_BYTES) {
+      await api.sendMessage(chatId, "❌ Voice note too large (>20MB). Send a shorter one.", replyTo);
+      return;
+    }
+    if (busyChats.has(chatId)) {
+      await api.sendMessage(chatId, "⏳ Still working on the previous request — please wait.", replyTo);
+      return;
+    }
+    const sarvam = new Sarvam(config.sarvamKey, config.sarvamTtsModel, config.sarvamSpeaker);
+    await api.sendChatAction(chatId, "record_voice");
+    try {
+      const file = await api.getFile(fileId);
+      if (!file.file_path) throw new Error("Telegram returned no file path.");
+      const saved = await api.downloadFile(file.file_path, inboxDir, `${Date.now()}-voice.oga`);
+      const tr = await sarvam.transcribe(saved);
+      console.log(`[voice] chat ${chatId}: (${tr.languageCode ?? "?"}) ${tr.text.slice(0, 120)}`);
+
+      const state = store.getChat(String(chatId));
+      const override =
+        state.voiceLang && state.voiceLang !== "auto" && state.voiceLang !== "off" ? state.voiceLang : undefined;
+      const hearLabel = langLabel(tr.languageCode);
+      const speakLabel = override ? langLabel(mapToTtsLang(override)) : hearLabel;
+      const prompt =
+        (quote ? quotePrefix(quote) + "\n" : "") +
+        `[Voice note transcribed from ${hearLabel}]: "${tr.text}"\n` +
+        `Reply for SPOKEN delivery: under 600 characters, in ${speakLabel}, plain sentences a text-to-speech engine can read — ` +
+        `no markdown, lists, URLs, emojis, or code. If the request needs tools or long work, do it, but keep the spoken part a short summary.`;
+      const spoken = await forwardToOpencode(chatId, replyTo, prompt, [saved], replyTo);
+      if ((store.getChat(String(chatId)).voiceLang ?? "auto") === "off") return; // text reply already delivered
+      const cleaned = parseReactLine(stripSendBlocks(stripAskBlocks(spoken))).cleaned;
+      const chunks = chunkForSpeech(cleaned || tr.text, 900, 2);
+      if (chunks.length === 0) return;
+      const ttsLang = mapToTtsLang(override ?? tr.languageCode);
+      let target: number | undefined = replyTo;
+      for (const chunk of chunks) {
+        await sendVoiceChunk(chatId, sarvam, chunk, ttsLang, target);
+        target = undefined;
+      }
+    } catch (err) {
+      await api.sendMessage(chatId, `❌ Voice failed: ${(err as Error).message.slice(0, 800)}`, replyTo);
+    }
   }
 
   async function handleMedia(chatId: number, replyTo: number, kind: "photo" | "document", fileId: string, fileName: string, fileSize: number | undefined, caption: string, quote?: QuotedMessage): Promise<void> {
@@ -1380,6 +1525,23 @@ async function main(): Promise<void> {
           undefined,
           `[Operator reaction] You received ${emojis.join(" ")} on your message: "${snippet}". Tone: ${tone} Keep it under 300 chars, no ASK blocks needed unless you're asking what to fix.`,
         ).catch((err) => console.error(`[reaction] ${(err as Error).message}`));
+        continue;
+      }
+
+      // Voice notes (Sarvam STT → agent → Sarvam TTS voice reply).
+      const voice = extractVoice(update);
+      if (voice) {
+        const chatId = voice.message.chat.id;
+        if (!isAllowed(voice.message.from?.id, voice.message.from?.username)) {
+          console.warn(`[auth] rejected voice from user ${voice.message.from?.id} in chat ${chatId}`);
+          continue;
+        }
+        void api.react(chatId, voice.message.message_id, "👀");
+        const voiceQuote = extractQuote(voice.message, me.id);
+        void handleVoice(chatId, voice.message.message_id, voice.fileId, voice.duration, voice.fileSize, voiceQuote).catch((err) =>
+          console.error(`[voice] ${(err as Error).message}`),
+        );
+        console.log(`[msg] chat ${chatId} voice note (${voice.duration}s)`);
         continue;
       }
 

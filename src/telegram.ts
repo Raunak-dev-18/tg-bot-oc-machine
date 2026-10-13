@@ -29,6 +29,14 @@ export interface TgDocument {
   file_size?: number;
 }
 
+export interface TgVoice {
+  file_id: string;
+  file_unique_id: string;
+  duration: number;
+  mime_type?: string;
+  file_size?: number;
+}
+
 export interface TgMessage {
   message_id: number;
   chat: TgChat;
@@ -37,6 +45,8 @@ export interface TgMessage {
   caption?: string;
   photo?: TgPhotoSize[];
   document?: TgDocument;
+  voice?: TgVoice;
+  audio?: TgDocument;
   reply_to_message?: TgMessage;
   date: number;
 }
@@ -252,6 +262,31 @@ export class TgApi {
     await this.sendFile("sendDocument", chatId, filePath, caption);
   }
 
+  /** Send audio bytes as a Telegram voice note (ogg/opus) or audio file (mp3). */
+  async sendVoiceData(
+    chatId: number,
+    audio: Buffer,
+    filename: string,
+    mime: string,
+    caption?: string,
+    replyTo?: number,
+  ): Promise<void> {
+    const { method, field } =
+      filename.endsWith(".ogg") || mime.includes("opus") || mime.includes("ogg")
+        ? { method: "sendVoice", field: "voice" }
+        : { method: "sendAudio", field: "audio" };
+    const form = new FormData();
+    form.set("chat_id", String(chatId));
+    form.set(field, new Blob([new Uint8Array(audio)], { type: mime }), filename);
+    if (caption) form.set("caption", caption.slice(0, 1000));
+    if (replyTo !== undefined) form.set("reply_to_message_id", String(replyTo));
+    const res = await fetch(`${this.base}/${method}`, { method: "POST", body: form });
+    if (!res.ok) {
+      const detail = await res.text().then((t) => t.slice(0, 300)).catch(() => res.statusText);
+      throw new Error(`Telegram ${method} failed: ${detail}`);
+    }
+  }
+
   async editMessage(chatId: number, messageId: number, text: string): Promise<void> {
     await this.call("editMessageText", {
       chat_id: chatId,
@@ -345,6 +380,27 @@ export interface MediaAttachment {
   fileName: string;
   fileSize?: number;
   caption: string;
+}
+
+export interface VoiceAttachment {
+  message: TgMessage;
+  fileId: string;
+  duration: number;
+  fileSize?: number;
+}
+
+/** Extract a voice/audio attachment from an update, if present. */
+export function extractVoice(update: TgUpdate): VoiceAttachment | null {
+  const message = update.message ?? update.channel_post;
+  if (!message) return null;
+  const voice = message.voice;
+  if (voice) {
+    return { message, fileId: voice.file_id, duration: voice.duration, fileSize: voice.file_size };
+  }
+  if (message.document && (message.document.mime_type ?? "").startsWith("audio/")) {
+    return { message, fileId: message.document.file_id, duration: 0, fileSize: message.document.file_size };
+  }
+  return null;
 }
 
 /** Extract a photo/document attachment from an update, if present. */

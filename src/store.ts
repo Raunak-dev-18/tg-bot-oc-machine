@@ -15,6 +15,8 @@ export interface ChatState {
   sessionList?: { id: string; title: string }[];
   /** Fresh list selection awaiting a bare-number reply ("2" picks option 2). */
   pendingSelect?: { kind: "model" | "session"; options: string[]; expiresAt: number };
+  /** Voice-note replies: BCP-47 code, "auto" (detect per note), or "off". */
+  voiceLang?: string;
   updatedAt: string;
 }
 

@@ -24,6 +24,10 @@ export interface BotConfig {
   healthPort: number;
   /** Max chained chunks per task before giving up (each chunk = timeoutMs). */
   maxChunks: number;
+  /** Sarvam AI voice (STT+TTS). Absent = voice notes get a setup hint. */
+  sarvamKey?: string;
+  sarvamTtsModel: string;
+  sarvamSpeaker?: string;
 }
 
 function parseBoolean(raw: string | undefined, fallback: boolean): boolean {
@@ -93,5 +97,8 @@ export function loadConfig(): BotConfig {
     pollTimeoutSec: Number(process.env.TELEGRAM_POLL_TIMEOUT ?? 50) || 50,
     healthPort: parseHealthPort(),
     maxChunks: Math.max(1, Math.min(10, Number(process.env.OPENCODE_MAX_CHUNKS ?? 4) || 4)),
+    sarvamKey: (process.env.SARVAM_API_KEY ?? "").trim() || undefined,
+    sarvamTtsModel: (process.env.SARVAM_TTS_MODEL ?? "bulbul:v2").trim() || "bulbul:v2",
+    sarvamSpeaker: (process.env.SARVAM_VOICE ?? "").trim() || undefined,
   };
 }

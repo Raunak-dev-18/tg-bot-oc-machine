@@ -77,7 +77,8 @@ Requires `SARVAM_API_KEY` where the bot runs (dashboard.sarvam.ai). Then:
 
 - `/voice hi` forces Hindi always, `/voice en` English, `/voice auto` follows each note,
   `/voice off` keeps text-only (still transcribes). `/say <text>` speaks anything.
-- TTS: `bulbul:v2` default speaker (override via `SARVAM_TTS_MODEL` / `SARVAM_VOICE`),
+- TTS: `bulbul:v3` default speaker (override via `SARVAM_TTS_MODEL` / `SARVAM_VOICE`;
+  note `bulbul:v2` is deprecated, opus needs 24 kHz which the bot sets automatically),
   3500 chars/call, paced/naturalized for pronunciation.
 
 Replies are chunked to Telegram's limits automatically and end with a

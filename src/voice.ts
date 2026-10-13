@@ -93,6 +93,8 @@ export class Sarvam {
       language_code: languageCode,
       model: this.ttsModel,
       output_audio_codec: codec,
+      // OPUS rejects the 22050 Hz default — 24000 Hz is Telegram-friendly.
+      ...(codec === "opus" ? { speech_sample_rate: 24000 } : {}),
     };
     if (this.speaker) payload.speaker = this.speaker;
     const ctrl = new AbortController();

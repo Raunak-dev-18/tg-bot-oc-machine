@@ -337,39 +337,59 @@ async function main(): Promise<void> {
     }
   }
 
-  /** Live "still working" status bubble, edited as the run progresses. */
+  /** Live "still working" status bubble, edited as the run progresses.
+   * Doubles as the streaming surface: once answer text flows, the bubble
+   * shows it live (Telegram has no true streaming API — message edits at a
+   * safe cadence are the standard approximation). */
   function makeStatus(chatId: number, replyTo: number | undefined) {
     let id: number | undefined;
-    let lastSent = "";
+    let lastBubble = "";
     let lastEditAt = 0;
+    let lastStreamEditAt = 0;
     let activity = "warming up…";
+    let streamed = "";
     const fmt = (sec: number) =>
       sec < 60 ? `${sec}s` : `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, "0")}s`;
+    async function edit(text: string): Promise<boolean> {
+      if (id === undefined || text === lastBubble) return false;
+      lastBubble = text;
+      try {
+        await api.editMessage(chatId, id, text);
+        return true;
+      } catch {
+        id = undefined; // message gone — stop trying
+        return false;
+      }
+    }
     return {
       note(text: string) {
         activity = text.slice(0, 120);
       },
+      stream(text: string) {
+        streamed = text;
+      },
       async start() {
         try {
           id = (await api.sendMessage(chatId, "⏳ Working on it…", replyTo)).message_id;
-          lastSent = "⏳ Working on it…";
+          lastBubble = "⏳ Working on it…";
         } catch {
           id = undefined;
         }
       },
       async tick(startedAt: number) {
         if (id === undefined) return;
-        const elapsed = Math.round((Date.now() - startedAt) / 1000);
+        const now = Date.now();
+        if (streamed) {
+          if (now - lastStreamEditAt < 1500) return;
+          lastStreamEditAt = now;
+          const head = streamed.slice(0, 3900);
+          await edit(head + (streamed.length > 3900 ? "\n… (streaming)" : "") + " ▍");
+          return;
+        }
+        const elapsed = Math.round((now - startedAt) / 1000);
         if (elapsed - lastEditAt < 45) return;
         lastEditAt = elapsed;
-        const text = `⏳ Still working… (${fmt(elapsed)})\n${activity}`;
-        if (text === lastSent) return;
-        lastSent = text;
-        try {
-          await api.editMessage(chatId, id, text);
-        } catch {
-          id = undefined; // message gone — stop trying
-        }
+        await edit(`⏳ Still working… (${fmt(elapsed)})\n${activity}`);
       },
       async done() {
         if (id !== undefined) {
@@ -405,7 +425,7 @@ async function main(): Promise<void> {
     try {
       await api.sendChatAction(chatId, "typing");
       const t0 = Date.now();
-      statusTick = setInterval(() => void status.tick(t0), 10000);
+      statusTick = setInterval(() => void status.tick(t0), 2000);
       const chatKey = String(chatId);
       const state = store.getChat(chatKey);
       const isNewSession = !state.sessionId;
@@ -438,6 +458,7 @@ async function main(): Promise<void> {
             console.log(`[opencode] chat ${chatId}: ${note}`);
           }
         },
+        onText: (cumulative) => status.stream(cumulative),
       });
       if (result.sessionId) store.setChat(chatKey, { ...state, sessionId: result.sessionId });
       const secs = Math.round((Date.now() - t0) / 1000);

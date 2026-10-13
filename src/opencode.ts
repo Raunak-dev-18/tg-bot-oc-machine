@@ -30,6 +30,8 @@ export interface RunOpts {
   skills?: string;
   /** Cancellation token — abort the spawned process via /stop. */
   cancel?: RunCancel;
+  /** Fired with cumulative answer text on every text event (for live streaming). */
+  onText?: (cumulative: string) => void;
   onProgress?: (note: string) => void;
 }
 
@@ -214,6 +216,11 @@ export function runOpencode(opts: RunOpts): Promise<RunResult> {
       if (ev.sessionID && !sessionId) sessionId = ev.sessionID;
       if (ev.type === "text" && typeof ev.part?.text === "string") {
         texts.push(ev.part.text);
+        try {
+          opts.onText?.(texts.join(""));
+        } catch {
+          /* streaming callback must never break the run */
+        }
       }
       if (ev.type === "step_finish") {
         const part = ev.part as unknown as

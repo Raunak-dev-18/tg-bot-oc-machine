@@ -112,6 +112,10 @@ e.g. ✅/❌ are rejected by the API, and anything invalid is skipped silently.)
 |---|---|
 | `/start`, `/help` | Welcome + this feature overview |
 | `/stop` | Cancel the currently running task (kills the agent run, replies ⏹️) |
+
+All 29 commands are registered via `setMyCommands` on every boot, so Telegram shows
+the `/` autocomplete menu (note: `/voice-ans` is registered as `/voice_ans` — Telegram
+command names forbid hyphens; both spellings work in chat).
 | `/bg <task>` | Run in background — chat stays free, result delivered here (fresh session) |
 | `/jobs` | List running tasks (they survive bot restarts and auto-resume) |
 | `/status` | Bot uptime, workdir, server health, browser MCP, session, model, memory size, cron count |

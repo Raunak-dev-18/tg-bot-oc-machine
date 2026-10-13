@@ -30,8 +30,7 @@ import {
 } from "./telegram.js";
 import { Sarvam, chunkForSpeech, cleanForSpeech, detectScriptLang, langLabel, mapToTtsLang } from "./voice.js";
 
-const HELP_TEXT = [
-  "🤖 Remote machine control via opencode",
+const HELP_TEXT = [  "🤖 Remote machine control via opencode",
   "",
   "Send any message — it goes to opencode on this machine, which can",
   "deploy/run apps, clone repos, edit files, run shell, etc.",
@@ -77,6 +76,39 @@ const HELP_TEXT = [
   "/agent <name> — switch opencode agent (default: build)",
   "/exec <shell command> — run shell directly, no AI",
 ].join("\n");
+
+/** Registered "/" menu (Bot API names: lowercase letters, digits, underscores only). */
+const COMMAND_MENU: { command: string; description: string }[] = [
+  { command: "start", description: "Welcome + status" },
+  { command: "help", description: "All commands" },
+  { command: "stop", description: "Cancel the running task" },
+  { command: "new", description: "Fresh session" },
+  { command: "reset", description: "Fresh session" },
+  { command: "status", description: "Bot + server health" },
+  { command: "free", description: "List free models" },
+  { command: "models", description: "List models" },
+  { command: "model", description: "Switch or show model" },
+  { command: "effort", description: "Reasoning effort level" },
+  { command: "sessions", description: "List recent sessions" },
+  { command: "switch", description: "Jump to a session" },
+  { command: "memory", description: "Show long-term memory" },
+  { command: "remember", description: "Save a fact" },
+  { command: "recall", description: "Search past sessions" },
+  { command: "skills", description: "List agent skills" },
+  { command: "parallel", description: "Run tasks concurrently" },
+  { command: "bg", description: "Background task" },
+  { command: "jobs", description: "List running tasks" },
+  { command: "cron", description: "Schedule a task" },
+  { command: "crons", description: "List scheduled tasks" },
+  { command: "uncron", description: "Delete a scheduled task" },
+  { command: "agent", description: "Switch agent" },
+  { command: "exec", description: "Run shell directly" },
+  { command: "shot", description: "Screenshot a webpage" },
+  { command: "send", description: "Send a machine file" },
+  { command: "voice", description: "Voice reply settings" },
+  { command: "voice_ans", description: "Answer in text + voice" },
+  { command: "say", description: "Speak text aloud" },
+];
 
 const MAX_TG_FILE_BYTES = 20 * 1024 * 1024;
 
@@ -151,6 +183,12 @@ async function main(): Promise<void> {
 
   const me = await api.getMe();
   console.log(`[bot] logged in as @${me.username} (id ${me.id})`);
+  try {
+    await api.setMyCommands(COMMAND_MENU);
+    console.log(`[bot] registered ${COMMAND_MENU.length} slash commands`);
+  } catch (err) {
+    console.error(`[bot] command menu registration failed: ${(err as Error).message}`);
+  }
 
   const { serverUrl } = await ensureServe({
     bin: config.opencodeBin,

@@ -90,6 +90,11 @@ export interface TgFile {
   file_path?: string;
 }
 
+export interface BotCommand {
+  command: string;
+  description: string;
+}
+
 export interface InlineKeyboardButton {
   text: string;
   callback_data: string;
@@ -136,6 +141,11 @@ export class TgApi {
 
   async getMe(): Promise<TgUser> {
     return this.call<TgUser>("getMe");
+  }
+
+  /** Register the "/" command menu (otherwise clients show no autocomplete). */
+  async setMyCommands(commands: BotCommand[]): Promise<void> {
+    await this.call("setMyCommands", { commands });
   }
 
   async getUpdates(offset?: number, timeoutSec = 50): Promise<TgUpdate[]> {

@@ -98,7 +98,7 @@ export function loadConfig(): BotConfig {
     healthPort: parseHealthPort(),
     maxChunks: Math.max(1, Math.min(10, Number(process.env.OPENCODE_MAX_CHUNKS ?? 4) || 4)),
     sarvamKey: (process.env.SARVAM_API_KEY ?? "").trim() || undefined,
-    sarvamTtsModel: (process.env.SARVAM_TTS_MODEL ?? "bulbul:v3").trim() || "bulbul:v3",
+    sarvamTtsModel: (process.env.SARVAM_TTS_MODEL ?? "bulbul:v4-flash").trim() || "bulbul:v4-flash",
     sarvamSpeaker: (process.env.SARVAM_VOICE ?? "").trim() || undefined,
   };
 }

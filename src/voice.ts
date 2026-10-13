@@ -68,8 +68,9 @@ export interface Transcript {
 export class Sarvam {
   constructor(
     private apiKey: string,
-    private ttsModel = "bulbul:v2",
+    private ttsModel = "bulbul:v4-flash",
     private speaker?: string,
+    private pace = 1,
   ) {}
 
   private headers(extra: Record<string, string> = {}): Record<string, string> {
@@ -123,6 +124,7 @@ export class Sarvam {
       language_code: languageCode,
       model: this.ttsModel,
       output_audio_codec: codec,
+      pace: this.pace,
       // OPUS rejects the 22050 Hz default — 24000 Hz is Telegram-friendly.
       ...(codec === "opus" ? { speech_sample_rate: 24000 } : {}),
     };

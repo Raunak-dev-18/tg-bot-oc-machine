@@ -77,8 +77,9 @@ Requires `SARVAM_API_KEY` where the bot runs (dashboard.sarvam.ai). Then:
 
 - `/voice hi` forces Hindi always, `/voice en` English, `/voice auto` follows each note,
   `/voice off` keeps text-only (still transcribes). `/say <text>` speaks anything.
-- TTS: `bulbul:v4-flash` default speaker (override via `SARVAM_TTS_MODEL` / `SARVAM_VOICE`;
-  note `bulbul:v2` is deprecated, opus needs 24 kHz which the bot sets automatically),
+- TTS: `bulbul:v4-flash` default speaker at pace 1 (tune via `SARVAM_TTS_MODEL` /
+  `SARVAM_VOICE` / `SARVAM_PACE` 0.5–2.0; note `bulbul:v2` is deprecated, opus needs
+  24 kHz which the bot sets automatically),
   STT: `saaras:v4` with auto language detect,
   3500 chars/call, paced/naturalized for pronunciation.
 

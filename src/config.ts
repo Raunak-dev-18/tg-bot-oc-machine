@@ -28,6 +28,7 @@ export interface BotConfig {
   sarvamKey?: string;
   sarvamTtsModel: string;
   sarvamSpeaker?: string;
+  sarvamPace: number;
 }
 
 function parseBoolean(raw: string | undefined, fallback: boolean): boolean {
@@ -100,5 +101,6 @@ export function loadConfig(): BotConfig {
     sarvamKey: (process.env.SARVAM_API_KEY ?? "").trim() || undefined,
     sarvamTtsModel: (process.env.SARVAM_TTS_MODEL ?? "bulbul:v4-flash").trim() || "bulbul:v4-flash",
     sarvamSpeaker: (process.env.SARVAM_VOICE ?? "").trim() || undefined,
+    sarvamPace: Math.min(2, Math.max(0.5, Number(process.env.SARVAM_PACE ?? 1) || 1)),
   };
 }

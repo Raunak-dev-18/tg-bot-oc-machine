@@ -1307,7 +1307,7 @@ async function main(): Promise<void> {
       if (!spoken.trim()) return; // error path already replied with ❌
       const cleaned = parseReactLine(stripSendBlocks(stripAskBlocks(spoken))).cleaned;
       if (!cleaned.trim()) return;
-      const sarvam = new Sarvam(config.sarvamKey, config.sarvamTtsModel, config.sarvamSpeaker);
+      const sarvam = new Sarvam(config.sarvamKey, config.sarvamTtsModel, config.sarvamSpeaker, config.sarvamPace);
       const ttsLang = mapToTtsLang(detected);
       const chunks = chunkForSpeech(cleaned, 900, 2);
       let target: number | undefined = replyTo;
@@ -1332,7 +1332,7 @@ async function main(): Promise<void> {
       const ttsLang = mapToTtsLang(langPref);
       await api.sendChatAction(chatId, "record_voice");
       try {
-        const sarvam = new Sarvam(config.sarvamKey, config.sarvamTtsModel, config.sarvamSpeaker);
+        const sarvam = new Sarvam(config.sarvamKey, config.sarvamTtsModel, config.sarvamSpeaker, config.sarvamPace);
         const chunks = chunkForSpeech(arg, 900, 2);
         let target: number | undefined = replyTo;
         for (const chunk of chunks) {
@@ -1417,7 +1417,7 @@ async function main(): Promise<void> {
       await api.sendMessage(chatId, "⏳ Still working on the previous request — please wait.", replyTo);
       return;
     }
-    const sarvam = new Sarvam(config.sarvamKey, config.sarvamTtsModel, config.sarvamSpeaker);
+    const sarvam = new Sarvam(config.sarvamKey, config.sarvamTtsModel, config.sarvamSpeaker, config.sarvamPace);
     await api.sendChatAction(chatId, "record_voice");
     try {
       const file = await api.getFile(fileId);

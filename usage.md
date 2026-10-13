@@ -132,6 +132,7 @@ e.g. ✅/❌ are rejected by the API, and anything invalid is skipped silently.)
 | `/send <absolute-path> [caption]` | Send any machine file to chat instantly, no AI round-trip |
 | 🎤 voice note | Transcribed (auto language) → text reply + spoken reply |
 | `/voice [hi\|en\|auto\|off]` | Voice reply language (default follows each note) |
+| `/voice-ans <text>` | Full AI answer in text + voice, auto-matched to your text's language |
 | `/say <text>` | Speak any text as a voice note |
 | `/cron <every 30m\|every 2h\|daily 09:30> <task>` | Run a task on schedule, delivered to this chat |
 | `/crons` | List scheduled tasks |

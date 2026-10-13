@@ -29,6 +29,36 @@ export function langLabel(code?: string): string {
   return names[code] ?? code;
 }
 
+/** Detect the dominant Indic script in text → BCP-47 code (default en-IN). */
+export function detectScriptLang(text: string): string {
+  const counts: Record<string, number> = {};
+  const mark = (code: string) => {
+    counts[code] = (counts[code] ?? 0) + 1;
+  };
+  for (const ch of text) {
+    const cp = ch.codePointAt(0) ?? 0;
+    if (cp >= 0x0900 && cp <= 0x097f) mark("hi-IN");
+    else if (cp >= 0x0980 && cp <= 0x09ff) mark("bn-IN");
+    else if (cp >= 0x0a00 && cp <= 0x0a7f) mark("pa-IN");
+    else if (cp >= 0x0a80 && cp <= 0x0aff) mark("gu-IN");
+    else if (cp >= 0x0b00 && cp <= 0x0b7f) mark("od-IN");
+    else if (cp >= 0x0b80 && cp <= 0x0bff) mark("ta-IN");
+    else if (cp >= 0x0c00 && cp <= 0x0c7f) mark("te-IN");
+    else if (cp >= 0x0c80 && cp <= 0x0cff) mark("kn-IN");
+    else if (cp >= 0x0d00 && cp <= 0x0d7f) mark("ml-IN");
+    else if (cp >= 0x0600 && cp <= 0x06ff) mark("ur-IN");
+  }
+  let best = "en-IN";
+  let bestCount = 0;
+  for (const [code, n] of Object.entries(counts)) {
+    if (n > bestCount) {
+      bestCount = n;
+      best = code;
+    }
+  }
+  return best;
+}
+
 export interface Transcript {
   text: string;
   languageCode?: string;

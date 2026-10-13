@@ -28,7 +28,7 @@ import {
   type QuotedMessage,
   type ReplyMarkup,
 } from "./telegram.js";
-import { Sarvam, chunkForSpeech, cleanForSpeech, langLabel, mapToTtsLang } from "./voice.js";
+import { Sarvam, chunkForSpeech, cleanForSpeech, detectScriptLang, langLabel, mapToTtsLang } from "./voice.js";
 
 const HELP_TEXT = [
   "🤖 Remote machine control via opencode",
@@ -69,6 +69,7 @@ const HELP_TEXT = [
   "/send <absolute-path> [caption] — send any machine file to chat instantly",
   "🎤 Send a voice note — transcribed, answered by text + voice (needs SARVAM_API_KEY)",
   "/voice [hi|en|auto|off] — voice reply language (default auto-detect)",
+  "/voice-ans <text> — answer in text + voice, same language as your text",
   "/say <text> — speak any text as a voice note",
   "/cron <every 30m|every 2h|daily 09:30> <task> — run a task on schedule",
   "/crons — list scheduled tasks",
@@ -1247,6 +1248,35 @@ async function main(): Promise<void> {
           : `✅ Voice replies ${next === "auto" ? "follow each note's language" : `always in ${langLabel(next)}`} (voice: ${mapped}).`,
         replyTo,
       );
+      return;
+    }
+
+    if (cmd === "/voice-ans" || cmd === "/voice_ans") {
+      if (!config.sarvamKey) {
+        await api.sendMessage(chatId, "🎤 Voice needs SARVAM_API_KEY set where the bot runs.", replyTo);
+        return;
+      }
+      if (!arg) {
+        await api.sendMessage(chatId, "Usage: /voice-ans <your message> — I reply in text + voice, same language.", replyTo);
+        return;
+      }
+      const detected = detectScriptLang(arg);
+      const speakLabel = langLabel(mapToTtsLang(detected));
+      const prompt =
+        `[Reply in ${speakLabel}] ${arg}\n` +
+        `Also keep it speakable: plain sentences, no markdown/lists/URLs/emojis. Under 600 characters if possible.`;
+      const spoken = await forwardToOpencode(chatId, replyTo, prompt, undefined, replyTo);
+      if (!spoken.trim()) return; // error path already replied with ❌
+      const cleaned = parseReactLine(stripSendBlocks(stripAskBlocks(spoken))).cleaned;
+      if (!cleaned.trim()) return;
+      const sarvam = new Sarvam(config.sarvamKey, config.sarvamTtsModel, config.sarvamSpeaker);
+      const ttsLang = mapToTtsLang(detected);
+      const chunks = chunkForSpeech(cleaned, 900, 2);
+      let target: number | undefined = replyTo;
+      for (const chunk of chunks) {
+        await sendVoiceChunk(chatId, sarvam, chunk, ttsLang, target);
+        target = undefined;
+      }
       return;
     }
 

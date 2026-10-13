@@ -624,12 +624,12 @@ async function main(): Promise<void> {
           files: fileList,
           memory: fresh ? await loadMemoryContext(config.dataDir) : undefined,
         });
-      const hasContent = (text: string) =>
-        stripSendBlocks(stripAskBlocks(parseReactLine(text).cleaned)).trim() !== "" ||
-        parseAskBlocks(text).length > 0 ||
-        parseSendBlocks(text).length > 0;
       let result = await runOnce(prompt, state.sessionId, isNewSession, files);
-      if (!hasContent(result.text)) {
+      const isEmpty = (text: string) =>
+        stripSendBlocks(stripAskBlocks(parseReactLine(text).cleaned)).trim() === "" &&
+        parseAskBlocks(text).length === 0 &&
+        parseSendBlocks(text).length === 0;
+      if (isEmpty(result.text)) {
         // Transient empty reply (free models flake) — one retry in the same session.
         console.warn(`[opencode] chat ${chatId}: empty reply, retrying once…`);
         status.note("empty reply — retrying…");
@@ -639,8 +639,8 @@ async function main(): Promise<void> {
           retrySession,
           !retrySession,
         );
-        if (!hasContent(result.text)) {
-          throw new Error("The model returned an empty reply twice — try /new, /model, or rephrase.");
+        if (isEmpty(result.text)) {
+          throw new Error("The model returned an empty reply twice — try /new for a fresh session, /model to switch, or rephrase.");
         }
       }
       if (result.sessionId) store.setChat(chatKey, { ...state, sessionId: result.sessionId });
@@ -1147,6 +1147,9 @@ async function main(): Promise<void> {
           const questions = parseAskBlocks(reacted.cleaned);
           const sends = parseSendBlocks(reacted.cleaned);
           let body = stripSendBlocks(stripAskBlocks(reacted.cleaned));
+          if (!body.trim() && questions.length === 0 && sends.length === 0) {
+            body = "(empty reply from the model — flaky free tier, run it again or /new)";
+          }
           for (const q of questions) {
             body += `\n\n❓ ${q.question}${q.options.length > 0 ? ` (options: ${q.options.join(" / ")})` : " (reply to answer)"}`;
           }

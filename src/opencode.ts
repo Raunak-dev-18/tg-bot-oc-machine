@@ -276,8 +276,11 @@ export function runOpencode(opts: RunOpts): Promise<RunResult> {
       if (stdoutBuffer.trim()) handleLine(stdoutBuffer.trim());
       const text = texts.join("").trim();
       if (code === 0) {
+        // NOTE: text may be legitimately empty (flaky model) — callers detect
+        // emptiness and retry. Never substitute a placeholder here: it would
+        // mask real emptiness from retry guards.
         resolve({
-          text: text || "(opencode returned no text)",
+          text,
           sessionId,
           tokens,
           cost,

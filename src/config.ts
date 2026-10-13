@@ -20,6 +20,8 @@ export interface BotConfig {
   autoServe: boolean;
   servePort: number;
   pollTimeoutSec: number;
+  /** HTTP health endpoint port (0 = disabled). Replit injects PORT for deployments. */
+  healthPort: number;
 }
 
 function parseBoolean(raw: string | undefined, fallback: boolean): boolean {
@@ -34,6 +36,13 @@ function parseAllowedUsers(raw: string | undefined): Set<number> {
     if (Number.isInteger(id) && id !== 0) set.add(id);
   }
   return set;
+}
+
+function parseHealthPort(): number {
+  const raw = process.env.PORT ?? process.env.HEALTH_PORT ?? "5001";
+  const n = Number(raw);
+  if (raw.trim() === "0" || n === 0) return 0; // disabled
+  return Number.isInteger(n) && n > 0 ? n : 5001;
 }
 
 function parseAllowedUsernames(raw: string | undefined): Set<string> {
@@ -80,5 +89,6 @@ export function loadConfig(): BotConfig {
     autoServe: parseBoolean(process.env.OPENCODE_AUTO_SERVE, true),
     servePort: Number(process.env.OPENCODE_SERVE_PORT ?? 4096) || 4096,
     pollTimeoutSec: Number(process.env.TELEGRAM_POLL_TIMEOUT ?? 50) || 50,
+    healthPort: parseHealthPort(),
   };
 }

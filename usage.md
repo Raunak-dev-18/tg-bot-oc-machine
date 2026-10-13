@@ -220,6 +220,7 @@ mouse/keyboard control of GUI apps is out of scope — browser + shell cover it.
 | `OPENCODE_SERVE_PORT` | `4096` | Serve port |
 | `OPENCODE_SERVER_URL` | auto | Use an externally managed server instead |
 | `TELEGRAM_POLL_TIMEOUT` | `50` | Long-poll seconds |
+| `HEALTH_PORT` | `5001` | HTTP health endpoint (`/` and `/healthz`, `0` = disabled; Replit injects `PORT`) |
 
 ---
 
@@ -260,3 +261,19 @@ mouse/keyboard control of GUI apps is out of scope — browser + shell cover it.
   (only one `getUpdates` consumer is allowed).
 - **Cron not firing** — bot must stay running (jobs live in its process); check `/crons`
   and `/status`.
+
+### Staying up 24/7
+
+A Replit workspace sleeps when idle — nothing inside it can prevent that. Your options:
+
+1. **Cheapest reliable: a small VPS** (~$5/mo, Hetzner/Contabo/DigitalOcean). Clone this
+   repo there and follow [AGENTS.md](./AGENTS.md) §3–§4 (systemd unit included). This is
+   the recommended path for a bot that must never sleep.
+2. **Replit Reserved VM deployment** — always-on, billed for reserved capacity. Deploy
+   this repo with run command `npm start` and the env vars from `.env.example`; the
+   `/healthz` endpoint satisfies deployment health checks.
+3. **Autoscale + uptime pinger (fragile)** — expose `/healthz` publicly and have an
+   external pinger (e.g. UptimeRobot, 5-min interval) hit it. Works until it doesn't;
+   cold starts still drop messages mid-sleep.
+
+In all cases, keep a single instance per token (duplicates cause double replies).

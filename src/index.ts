@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { statSync } from "node:fs";
 import { mkdir, readdir, stat } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { ensureBotConfigHome } from "./botconfig.js";
 import { computeNext, describeSpec, formatNext, parseSpec } from "./cron.js";
@@ -148,6 +149,31 @@ async function main(): Promise<void> {
   let attachUrl = config.serverUrl ?? serverUrl;
   if (attachUrl) console.log(`[bot] opencode runs will --attach ${attachUrl}`);
 
+  // HTTP health endpoint for deployments / uptime pingers (keeps 24/7 hosts honest).
+  let healthServer: Server | undefined;
+  if (config.healthPort > 0) {
+    healthServer = createServer(async (req, res) => {
+      if (req.url !== "/" && req.url !== "/healthz") {
+        res.writeHead(404);
+        res.end("not found");
+        return;
+      }
+      const healthy = attachUrl ? await isServeHealthy(attachUrl) : true;
+      res.writeHead(healthy ? 200 : 503, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          ok: healthy,
+          bot: "tg-control-bot",
+          uptimeSec: Math.round((Date.now() - startedAt) / 1000),
+          opencodeServer: attachUrl ?? "direct",
+        }),
+      );
+    });
+    healthServer.listen(config.healthPort, "0.0.0.0", () =>
+      console.log(`[health] listening on :${config.healthPort}`),
+    );
+  }
+
   /** Self-heal: restart the background server if it died; fall back to direct runs. */
   async function refreshServe(): Promise<void> {
     if (!config.autoServe || config.serverUrl || !attachUrl) return;
@@ -169,8 +195,7 @@ async function main(): Promise<void> {
   }
 
   const startedAt = Date.now();
-  const busyChats = new Set<number>();
-  /** In-flight opencode runs per chat (for /stop cancellation). */
+  const busyChats = new Set<number>();  /** In-flight opencode runs per chat (for /stop cancellation). */
   const running = new Map<number, RunCancel[]>();
 
   function trackRun(chatId: number): RunCancel {
@@ -213,6 +238,11 @@ async function main(): Promise<void> {
     if (stopped) return;
     stopped = true;
     console.log("[bot] shutting down…");
+    try {
+      healthServer?.close();
+    } catch {
+      /* ignore */
+    }
     void store.flush().finally(() => process.exit(0));
   };
   process.on("SIGINT", shutdown);

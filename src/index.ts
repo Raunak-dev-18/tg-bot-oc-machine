@@ -12,9 +12,9 @@ import { computeNext, describeSpec, formatNext, parseSpec } from "./cron.js";
 import { loadConfig } from "./config.js";
 import { PendingQuestions, parseAskBlocks, parseReactLine, parseSendBlocks, stripAskBlocks, stripSendBlocks } from "./interact.js";
 import { loadMemoryContext, memoryPaths, readMemoryFile, rememberFact } from "./memory.js";
-import { getVerboseModels, listPlainModels, listSessions, lookupModel, recallSessions } from "./models.js";
+import { getVerboseModels, listPlainModels, listSessions, lookupModel, recallSessions, findLatestSession } from "./models.js";
 import { loadSkills, skillsCatalog } from "./skills.js";
-import { runOpencode, CancelledError, type RunCancel } from "./opencode.js";
+import { runOpencode, CancelledError, TimeoutError, type RunCancel } from "./opencode.js";
 import { ensureServe, isServeHealthy } from "./serve.js";
 import { Store } from "./store.js";
 import {
@@ -61,6 +61,8 @@ const HELP_TEXT = [
   "/recall <keywords> — search past sessions for context",
   "/skills — list installed agent skills",
   "/parallel <t1> ;; <t2> [;; t3] — run up to 3 tasks concurrently",
+  "/bg <task> — run in background, chat stays free (fresh session)",
+  "/jobs — list running tasks (survive bot restarts)",
   "/shot <url> [note] — open a page in the agent browser, screenshot to chat",
   "/send <absolute-path> [caption] — send any machine file to chat instantly",
   "/cron <every 30m|every 2h|daily 09:30> <task> — run a task on schedule",
@@ -401,19 +403,124 @@ async function main(): Promise<void> {
     };
   }
 
-  /** Shared pipeline: prompt (+optional files) → opencode → reply + ASK buttons. */
+  /** Shared pipeline: prompt (+optional files) → opencode → reply + ASK buttons.
+   * Long tasks are chained: a chunk that hits the time limit auto-continues in
+   * the same session (up to maxChunks) instead of erroring. */
+  interface ChainedResult {
+    text: string;
+    sessionId?: string;
+    tokens?: { input: number; output: number };
+    cost?: number;
+    chunks: number;
+    partial: boolean;
+  }
+
+  async function runChained(opts: {
+    prompt: string;
+    sessionId?: string;
+    isNewSession: boolean;
+    model?: string;
+    agent: string;
+    variant?: string;
+    autoApprove: boolean;
+    timeoutMs: number;
+    maxChunks: number;
+    cwd: string;
+    bin: string;
+    serverUrl?: string;
+    files?: string[];
+    outboxDir?: string;
+    agentVenv?: string;
+    memoryDir?: string;
+    memory?: string;
+    skills?: string;
+    cancel?: RunCancel;
+    runStartedAt: number;
+    excludeSessions: string[];
+    onProgress?: (note: string) => void;
+    onText?: (cumulative: string) => void;
+  }): Promise<ChainedResult> {
+    let prompt = opts.prompt;
+    let sessionId = opts.sessionId;
+    let isNew = opts.isNewSession;
+    let combined = "";
+    let tokens: { input: number; output: number } | undefined;
+    let cost: number | undefined;
+    for (let n = 1; n <= opts.maxChunks; n++) {
+      try {
+        const r = await runOpencode({
+          prompt,
+          sessionId,
+          isNewSession: isNew,
+          model: opts.model,
+          agent: opts.agent,
+          variant: opts.variant,
+          autoApprove: opts.autoApprove,
+          timeoutMs: opts.timeoutMs,
+          cwd: opts.cwd,
+          bin: opts.bin,
+          serverUrl: opts.serverUrl,
+          files: n === 1 ? opts.files : undefined,
+          outboxDir: opts.outboxDir,
+          agentVenv: opts.agentVenv,
+          memoryDir: opts.memoryDir,
+          memory: opts.memory,
+          skills: opts.skills,
+          cancel: opts.cancel,
+          onProgress: opts.onProgress,
+          onText: (c) => opts.onText?.(combined + c),
+        });
+        if (r.text.trim()) combined += (combined ? "\n" : "") + r.text.trim();
+        tokens = r.tokens ?? tokens;
+        cost = r.cost ?? cost;
+        if (r.sessionId) sessionId = r.sessionId;
+        return { text: combined.trim(), sessionId, tokens, cost, chunks: n, partial: false };
+      } catch (err) {
+        if (!(err instanceof TimeoutError)) throw err;
+        if (err.partialText.trim()) combined += (combined ? "\n" : "") + err.partialText.trim();
+        if (err.sessionId) sessionId = err.sessionId;
+        if (n >= opts.maxChunks) {
+          // Out of chunks: deliver everything produced so far instead of erroring.
+          if (combined.trim()) {
+            return { text: combined.trim(), sessionId, tokens, cost, chunks: n, partial: true };
+          }
+          throw err;
+        }
+        if (!sessionId && opts.serverUrl) {
+          await new Promise((r) => setTimeout(r, 5000));
+          sessionId =
+            (await findLatestSession({
+              serverUrl: opts.serverUrl,
+              cwd: opts.cwd,
+              sinceMs: opts.runStartedAt,
+              exclude: opts.excludeSessions,
+            })) ?? sessionId;
+        }
+        opts.onProgress?.(`continuing… (part ${n + 1} — previous step hit the time limit)`);
+        const tail = combined.trim().slice(-500);
+        prompt =
+            `Continue EXACTLY where you left off — do not restart, do not summarize, just keep working on the original task. ` +
+            `The last part of what you produced so far (already delivered, do not repeat it):\n${tail || "(no output yet)"}`;
+        isNew = false;
+      }
+    }
+    throw new Error("unreachable");
+  }
+
   async function forwardToOpencode(
     chatId: number,
     replyTo: number | undefined,
     prompt: string,
     files?: string[],
     reactTo?: number,
+    opts?: { background?: boolean; jobId?: string; maxChunks?: number },
   ): Promise<void> {
-    if (busyChats.has(chatId)) {
+    const background = opts?.background ?? false;
+    if (!background && busyChats.has(chatId)) {
       await api.sendMessage(chatId, "⏳ Still working on the previous request — please wait.", replyTo);
       return;
     }
-    busyChats.add(chatId);
+    if (!background) busyChats.add(chatId);
     const status = makeStatus(chatId, replyTo);
     await status.start();
     const typingTimer = setInterval(() => void api.sendChatAction(chatId, "typing"), 4000);
@@ -422,23 +529,45 @@ async function main(): Promise<void> {
     const outboxBefore = new Set<string>(await readdir(config.outboxDir).catch(() => [] as string[]));
     await refreshServe();
     const ctrl = trackRun(chatId);
+    const chatKey = String(chatId);
+    const state = store.getChat(chatKey);
+    // Persisted before the run so a bot restart can resume it (/jobs).
+    const jobId =
+      opts?.jobId ??
+      (() => {
+        const id = `r${randomBytes(3).toString("hex")}`;
+        store.addRun({
+          id,
+          chatId,
+          replyTo,
+          prompt: prompt.slice(0, 4000),
+          files,
+          sessionId: state.sessionId,
+          label: prompt.slice(0, 60),
+          background,
+          createdAt: new Date().toISOString(),
+        });
+        return id;
+      })();
     try {
       await api.sendChatAction(chatId, "typing");
       const t0 = Date.now();
       statusTick = setInterval(() => void status.tick(t0), 2000);
-      const chatKey = String(chatId);
-      const state = store.getChat(chatKey);
       const isNewSession = !state.sessionId;
       const memPaths = memoryPaths(config.dataDir);
-      const result = await runOpencode({
+      const result = await runChained({
         prompt,
-        sessionId: state.sessionId,
-        isNewSession,
+        // Background runs get a FRESH session: sharing the chat's live session
+        // across concurrent runs would interleave messages and corrupt it.
+        // Memory + skills still inject (new-session path), so context survives.
+        sessionId: background ? undefined : state.sessionId,
+        isNewSession: background ? true : isNewSession,
         model: state.model ?? config.model,
         agent: state.agent ?? config.agent,
         variant: state.effort,
         autoApprove: config.autoApprove,
         timeoutMs: config.timeoutMs,
+        maxChunks: opts?.maxChunks ?? config.maxChunks,
         cwd: config.workDir,
         bin: config.opencodeBin,
         serverUrl: attachUrl,
@@ -450,6 +579,8 @@ async function main(): Promise<void> {
         memoryDir: memPaths.dir,
         memory: isNewSession ? await loadMemoryContext(config.dataDir) : undefined,
         cancel: ctrl,
+        runStartedAt: t0,
+        excludeSessions: state.sessionId ? [state.sessionId] : [],
         onProgress: (note) => {
           status.note(note);
           const now = Date.now();
@@ -462,7 +593,8 @@ async function main(): Promise<void> {
       });
       if (result.sessionId) store.setChat(chatKey, { ...state, sessionId: result.sessionId });
       const secs = Math.round((Date.now() - t0) / 1000);
-      console.log(`[opencode] chat ${chatId}: done in ${secs}s, session ${result.sessionId ?? "?"}, ${result.text.length} chars`);
+      const chunkNote = result.chunks > 1 ? ` (${result.chunks} parts${result.partial ? ", cut short" : ""})` : "";
+      console.log(`[opencode] chat ${chatId}: done in ${secs}s${chunkNote}, session ${result.sessionId ?? "?"}, ${result.text.length} chars`);
 
       const reacted = parseReactLine(result.text);
       const questions = parseAskBlocks(reacted.cleaned);
@@ -470,8 +602,8 @@ async function main(): Promise<void> {
       const body = stripSendBlocks(stripAskBlocks(reacted.cleaned));
       const footer =
         result.tokens || result.cost !== undefined
-          ? `\n\n— done in ${secs}s${result.tokens ? ` · tokens ${result.tokens.input}in/${result.tokens.output}out` : ""}${result.cost !== undefined ? ` · $${result.cost.toFixed(4)}` : ""}`
-          : `\n\n— done in ${secs}s`;
+          ? `\n\n— done in ${secs}s${chunkNote}${result.tokens ? ` · tokens ${result.tokens.input}in/${result.tokens.output}out` : ""}${result.cost !== undefined ? ` · $${result.cost.toFixed(4)}` : ""}`
+          : `\n\n— done in ${secs}s${chunkNote}`;
       if (body) await sendReply(chatId, body + (questions.length > 0 ? "" : footer), replyTo);
       const sentPaths = await deliverSendFiles(chatId, sends);
       await deliverOutbox(chatId, await collectOutbox(outboxBefore), sentPaths);
@@ -512,8 +644,9 @@ async function main(): Promise<void> {
       clearInterval(typingTimer);
       if (statusTick) clearInterval(statusTick);
       await status.done();
-      busyChats.delete(chatId);
+      if (!background) busyChats.delete(chatId);
       untrackRun(chatId, ctrl);
+      store.removeRun(jobId);
     }
   }
 
@@ -977,6 +1110,50 @@ async function main(): Promise<void> {
       return;
     }
 
+    if (cmd === "/bg") {
+      if (!arg) {
+        await api.sendMessage(chatId, "Usage: /bg <task> — runs in background, chat stays free. /jobs to list, /stop to cancel.", replyTo);
+        return;
+      }
+      const mine = store.getRuns().filter((j) => j.chatId === chatId);
+      if (mine.length >= 3) {
+        await api.sendMessage(chatId, "❌ Max 3 running tasks per chat. Wait or /stop one first (see /jobs).", replyTo);
+        return;
+      }
+      const id = `b${randomBytes(3).toString("hex")}`;
+      store.addRun({
+        id,
+        chatId,
+        replyTo,
+        prompt: arg.slice(0, 4000),
+        files: undefined,
+        sessionId: undefined,
+        label: arg.slice(0, 60),
+        background: true,
+        createdAt: new Date().toISOString(),
+      });
+      await api.sendMessage(chatId, `🛰️ Background task started (${id}). Chat stays free — I'll deliver here when done. /jobs · /stop`, replyTo);
+      void forwardToOpencode(chatId, replyTo, arg, undefined, replyTo, { background: true, jobId: id }).catch((err) =>
+        console.error(`[bg] ${(err as Error).message}`),
+      );
+      return;
+    }
+
+    if (cmd === "/jobs") {
+      const mine = store.getRuns().filter((j) => j.chatId === chatId);
+      if (mine.length === 0) {
+        await api.sendMessage(chatId, "No running tasks. Start one with /bg <task> or just talk.", replyTo);
+        return;
+      }
+      const age = (iso: string) => {
+        const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+        return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+      };
+      const lines = mine.map((j) => `• [${j.id}] “${j.label}” — running ${age(j.createdAt)}${j.background ? " (bg)" : ""}`);
+      await api.sendMessage(chatId, `🛰️ Running tasks:\n${lines.join("\n")}\n\nCancel with /stop.`, replyTo);
+      return;
+    }
+
     if (cmd === "/agent") {
       const state = store.getChat(chatKey);
       if (!arg) {
@@ -1072,6 +1249,36 @@ async function main(): Promise<void> {
 
   console.log("[bot] polling for updates…");
   let offset = store.getOffset();
+
+  // Resume runs interrupted by a bot restart (persisted in /jobs).
+  // Sequential per chat (sessions can't take concurrent writers), parallel across chats.
+  const interrupted = store.getRuns();
+  if (interrupted.length > 0) {
+    console.log(`[bot] resuming ${interrupted.length} interrupted run(s)…`);
+    const byChat = new Map<number, typeof interrupted>();
+    for (const job of interrupted) {
+      const list = byChat.get(job.chatId) ?? [];
+      list.push(job);
+      byChat.set(job.chatId, list);
+    }
+    void Promise.all(
+      [...byChat].map(([cid, jobs]) =>
+        (async () => {
+          for (const job of jobs) {
+            try {
+              await api.sendMessage(cid, `🔄 Resuming interrupted task (${job.id}): “${job.label}”…`);
+            } catch {
+              /* chat may be gone */
+            }
+            await forwardToOpencode(cid, job.replyTo, job.prompt, job.files, undefined, {
+              background: true,
+              jobId: job.id,
+            });
+          }
+        })().catch((err) => console.error(`[resume] ${(err as Error).message}`)),
+      ),
+    );
+  }
 
   // Scheduled tasks (hermes/openclaw-style cron): tick every 20s, run due jobs.
   const cronTimer = setInterval(() => {

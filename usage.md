@@ -80,8 +80,7 @@ the agent's own emotional `REACT:` emoji (or 👍) when done, 👎 on failure.
 each). Tap one — your answer flows back into the same session and work continues.
 Free-text questions are asked as `❓ … (Reply with your answer in chat.)` — just reply.
 
-**Reactions, both ways.** React to any bot reply (👍 ❤️ 👎 …) — the update reaches the
-agent with the original message attached: praise gets a brief thanks + a memory note,
+**Reactions, both ways.** React to any bot reply (👍 ❤️ 👎 …) — the update reaches theagent with the original message attached: praise gets a brief thanks + a memory note,
 criticism gets an apology and an offer to fix. The bot reacts back with **whatever the
 agent feels**: every reply ends in a `REACT: <emoji>` line the agent chooses itself
 (🔥 pride, 😅 relief, 🎉 celebration, 😔 apology…), attached to your message, plus
@@ -96,6 +95,8 @@ e.g. ✅/❌ are rejected by the API, and anything invalid is skipped silently.)
 |---|---|
 | `/start`, `/help` | Welcome + this feature overview |
 | `/stop` | Cancel the currently running task (kills the agent run, replies ⏹️) |
+| `/bg <task>` | Run in background — chat stays free, result delivered here (fresh session) |
+| `/jobs` | List running tasks (they survive bot restarts and auto-resume) |
 | `/status` | Bot uptime, workdir, server health, browser MCP, session, model, memory size, cron count |
 | `/new`, `/reset` | Forget the conversation; next message starts a fresh session (with memory loaded) |
 | `/free` | Numbered list of **free** models (`👁` = sees images, plus context sizes). Reply with the **number** to select |
@@ -131,6 +132,17 @@ e.g. ✅/❌ are rejected by the API, and anything invalid is skipped silently.)
   (via `opencode export`) and returns title + snippet hits. Your past work stays findable.
 - **Parallel** — `/parallel <task 1> ;; <task 2> [;; <task 3>]` runs up to 3 tasks
   concurrently in fresh sessions (main session untouched), results labeled per task.
+
+### Long-horizon tasks (no timeouts, background, survival)
+
+- **Timeout chaining** — a step that hits `OPENCODE_TIMEOUT_MS` (default 10 min) no longer
+  errors. The bot re-attaches to the same session and says "continue where you left off",
+  up to `OPENCODE_MAX_CHUNKS` (default 4 ≈ 40 min/task). Partials stream into the bubble;
+  the footer reports `(3 parts)` when chained. Exhausted chunks deliver everything made so far.
+- **Background** — `/bg <task>` runs with chat free (fresh session, same memory/skills).
+  Max 3 per chat. Result lands here when done; `/stop` cancels.
+- **Restart-proof** — every started run is journaled (`/jobs` lists them). If the bot
+  restarts mid-task, it auto-resumes each one with a `🔄 Resuming…` note on boot.
 
 **Effort levels:** reasoning effort (`minimal → low → medium → high → xhigh → max`)
 trades speed for thinking depth. Available levels depend on the model — e.g.

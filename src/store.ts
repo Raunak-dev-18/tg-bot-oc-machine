@@ -29,15 +29,29 @@ export interface CronJob {
   failures: number;
 }
 
+/** An unfinished agent run — resumed after bot restarts, listed via /jobs. */
+export interface RunJob {
+  id: string;
+  chatId: number;
+  replyTo?: number;
+  prompt: string;
+  files?: string[];
+  sessionId?: string;
+  label: string;
+  background: boolean;
+  createdAt: string;
+}
+
 interface StoreData {
   offset?: number;
   chats: Record<string, ChatState>;
   crons: CronJob[];
+  runs: RunJob[];
 }
 
 export class Store {
   private file: string;
-  private data: StoreData = { chats: {}, crons: [] };
+  private data: StoreData = { chats: {}, crons: [], runs: [] };
   private saveTimer: NodeJS.Timeout | undefined;
 
   constructor(dataDir: string) {
@@ -50,7 +64,7 @@ export class Store {
       const raw = await readFile(this.file, "utf8");
       const parsed = JSON.parse(raw) as StoreData;
       if (parsed && typeof parsed === "object" && parsed.chats) {
-        this.data = { offset: parsed.offset, chats: parsed.chats, crons: parsed.crons ?? [] };
+        this.data = { offset: parsed.offset, chats: parsed.chats, crons: parsed.crons ?? [], runs: parsed.runs ?? [] };
       }
     } catch {
       // First run — start empty.
@@ -128,5 +142,21 @@ export class Store {
       return true;
     }
     return false;
+  }
+
+  getRuns(): RunJob[] {
+    return this.data.runs;
+  }
+
+  addRun(job: RunJob): void {
+    this.data.runs.push(job);
+    this.scheduleSave();
+  }
+
+  removeRun(id: string): void {
+    if (this.data.runs.some((j) => j.id === id)) {
+      this.data.runs = this.data.runs.filter((j) => j.id !== id);
+      this.scheduleSave();
+    }
   }
 }

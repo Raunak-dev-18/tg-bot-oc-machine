@@ -57,6 +57,19 @@ export class CancelledError extends Error {
   }
 }
 
+/** Rejects when the run exceeds timeoutMs. Carries partial text + session for chaining. */
+export class TimeoutError extends Error {
+  readonly timedOut = true;
+  constructor(
+    public partialText: string,
+    public sessionId: string | undefined,
+    timeoutMs: number,
+  ) {
+    super(`opencode timed out after ${Math.round(timeoutMs / 1000)}s`);
+    this.name = "TimeoutError";
+  }
+}
+
 const OPS_SYSTEM_PREFIX = [
   "You are the autonomous operator of this Linux machine, driven via a Telegram bot.",
   "The operator chats via Telegram; your reply is sent back as the chat reply.",
@@ -198,7 +211,7 @@ export function runOpencode(opts: RunOpts): Promise<RunResult> {
       if (!settled) {
         settled = true;
         child.kill("SIGKILL");
-        reject(new Error(`opencode timed out after ${Math.round(opts.timeoutMs / 1000)}s`));
+        reject(new TimeoutError(texts.join("").trim(), sessionId, opts.timeoutMs));
       }
     }, opts.timeoutMs);
     timer.unref?.();

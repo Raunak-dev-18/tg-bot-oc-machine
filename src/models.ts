@@ -223,8 +223,43 @@ export async function recallSessions(opts: {
   return { hits, searched, skipped };
 }
 
-/** Look up one model id in cached verbose data (opencode provider only). */
-export async function lookupModel(opts: {
+/**
+ * Find the newest session for a project directory created after `sinceMs`,
+ * excluding known ids. Used to re-attach to a run that outlived its timeout
+ * (opencode only accepts server-generated session ids, so we discover it).
+ */
+export async function findLatestSession(opts: {
+  serverUrl: string;
+  cwd: string;
+  sinceMs: number;
+  exclude?: string[];
+}): Promise<string | undefined> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 10000);
+  try {
+    const res = await fetch(`${opts.serverUrl}/session`, { signal: ctrl.signal });
+    if (!res.ok) return undefined;
+    const sessions = (await res.json()) as {
+      id: string;
+      directory?: string;
+      time?: { created?: number };
+    }[];
+    const excluded = new Set(opts.exclude ?? []);
+    const targetDir = opts.cwd.replace(/\/+$/, "");
+    const candidates = sessions.filter(
+      (s) =>
+        !excluded.has(s.id) &&
+        (s.directory ?? "").replace(/\/+$/, "") === targetDir &&
+        (s.time?.created ?? 0) >= opts.sinceMs - 5000,
+    );
+    candidates.sort((a, b) => (b.time?.created ?? 0) - (a.time?.created ?? 0));
+    return candidates[0]?.id;
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
+}export async function lookupModel(opts: {
   bin: string;
   cwd: string;
   dataDir: string;

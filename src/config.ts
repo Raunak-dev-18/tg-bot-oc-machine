@@ -22,6 +22,8 @@ export interface BotConfig {
   pollTimeoutSec: number;
   /** HTTP health endpoint port (0 = disabled). Replit injects PORT for deployments. */
   healthPort: number;
+  /** Max chained chunks per task before giving up (each chunk = timeoutMs). */
+  maxChunks: number;
 }
 
 function parseBoolean(raw: string | undefined, fallback: boolean): boolean {
@@ -90,5 +92,6 @@ export function loadConfig(): BotConfig {
     servePort: Number(process.env.OPENCODE_SERVE_PORT ?? 4096) || 4096,
     pollTimeoutSec: Number(process.env.TELEGRAM_POLL_TIMEOUT ?? 50) || 50,
     healthPort: parseHealthPort(),
+    maxChunks: Math.max(1, Math.min(10, Number(process.env.OPENCODE_MAX_CHUNKS ?? 4) || 4)),
   };
 }

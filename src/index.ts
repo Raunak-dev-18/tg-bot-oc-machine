@@ -584,13 +584,7 @@ async function main(): Promise<void> {
       statusTick = setInterval(() => void status.tick(t0), 2000);
       const isNewSession = !state.sessionId;
       const memPaths = memoryPaths(config.dataDir);
-      const result = await runChained({
-        prompt,
-        // Background runs get a FRESH session: sharing the chat's live session
-        // across concurrent runs would interleave messages and corrupt it.
-        // Memory + skills still inject (new-session path), so context survives.
-        sessionId: background ? undefined : state.sessionId,
-        isNewSession: background ? true : isNewSession,
+      const sharedRun = {
         model: state.model ?? config.model,
         agent: state.agent ?? config.agent,
         variant: state.effort,
@@ -600,17 +594,15 @@ async function main(): Promise<void> {
         cwd: config.workDir,
         bin: config.opencodeBin,
         serverUrl: attachUrl,
-        files,
         outboxDir: config.outboxDir,
         agentVenv: path.join(config.dataDir, ".agent-venv", "bin", "python"),
         // Skills catalog is small — inject every turn so ongoing sessions keep it.
         skills: skillsText,
         memoryDir: memPaths.dir,
-        memory: isNewSession ? await loadMemoryContext(config.dataDir) : undefined,
         cancel: ctrl,
         runStartedAt: t0,
         excludeSessions: state.sessionId ? [state.sessionId] : [],
-        onProgress: (note) => {
+        onProgress: (note: string) => {
           status.note(note);
           const now = Date.now();
           if (now - progressTimer.lastNote > 20_000) {
@@ -618,8 +610,39 @@ async function main(): Promise<void> {
             console.log(`[opencode] chat ${chatId}: ${note}`);
           }
         },
-        onText: (cumulative) => status.stream(cumulative),
-      });
+        onText: (cumulative: string) => status.stream(cumulative),
+      };
+      const runOnce = async (p: string, sid: string | undefined, fresh: boolean, fileList?: string[]) =>
+        runChained({
+          ...sharedRun,
+          prompt: p,
+          // Background runs get a FRESH session: sharing the chat's live session
+          // across concurrent runs would interleave messages and corrupt it.
+          // Memory + skills still inject (new-session path), so context survives.
+          sessionId: background ? undefined : sid,
+          isNewSession: background ? true : fresh,
+          files: fileList,
+          memory: fresh ? await loadMemoryContext(config.dataDir) : undefined,
+        });
+      const hasContent = (text: string) =>
+        stripSendBlocks(stripAskBlocks(parseReactLine(text).cleaned)).trim() !== "" ||
+        parseAskBlocks(text).length > 0 ||
+        parseSendBlocks(text).length > 0;
+      let result = await runOnce(prompt, state.sessionId, isNewSession, files);
+      if (!hasContent(result.text)) {
+        // Transient empty reply (free models flake) — one retry in the same session.
+        console.warn(`[opencode] chat ${chatId}: empty reply, retrying once…`);
+        status.note("empty reply — retrying…");
+        const retrySession = result.sessionId ?? (background ? undefined : state.sessionId);
+        result = await runOnce(
+          `Your previous reply came back empty. Please answer the original request now:\n\n${prompt}`,
+          retrySession,
+          !retrySession,
+        );
+        if (!hasContent(result.text)) {
+          throw new Error("The model returned an empty reply twice — try /new, /model, or rephrase.");
+        }
+      }
       if (result.sessionId) store.setChat(chatKey, { ...state, sessionId: result.sessionId });
       const secs = Math.round((Date.now() - t0) / 1000);
       const chunkNote = result.chunks > 1 ? ` (${result.chunks} parts${result.partial ? ", cut short" : ""})` : "";
@@ -1344,8 +1367,10 @@ async function main(): Promise<void> {
         `no markdown, lists, URLs, emojis, or code. If the request needs tools or long work, do it, but keep the spoken part a short summary.`;
       const spoken = await forwardToOpencode(chatId, replyTo, prompt, [saved], replyTo);
       if ((store.getChat(String(chatId)).voiceLang ?? "auto") === "off") return; // text reply already delivered
+      if (!spoken.trim()) return; // error path already replied with ❌ — never voice placeholders
       const cleaned = parseReactLine(stripSendBlocks(stripAskBlocks(spoken))).cleaned;
-      const chunks = chunkForSpeech(cleaned || tr.text, 900, 2);
+      if (!cleaned.trim()) return;
+      const chunks = chunkForSpeech(cleaned, 900, 2);
       if (chunks.length === 0) return;
       const ttsLang = mapToTtsLang(override ?? tr.languageCode);
       let target: number | undefined = replyTo;

@@ -159,6 +159,9 @@ e.g. ✅/❌ are rejected by the API, and anything invalid is skipped silently.)
   errors. The bot re-attaches to the same session and says "continue where you left off",
   up to `OPENCODE_MAX_CHUNKS` (default 4 ≈ 40 min/task). Partials stream into the bubble;
   the footer reports `(3 parts)` when chained. Exhausted chunks deliver everything made so far.
+- **Empty-reply retry** — free models occasionally return zero text; the bot retries once in
+  the same session automatically, and only errors if both come back empty. Voice notes never
+  speak placeholders.
 - **Background** — `/bg <task>` runs with chat free (fresh session, same memory/skills).
   Max 3 per chat. Result lands here when done; `/stop` cancels.
 - **Restart-proof** — every started run is journaled (`/jobs` lists them). If the bot

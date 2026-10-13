@@ -177,8 +177,7 @@ export class TgApi {
     }
   }
 
-  /** React to a message (best-effort — never throws). */
-  async react(chatId: number, messageId: number, emoji: string): Promise<void> {
+  /** React to a message (best-effort — never throws). */  async react(chatId: number, messageId: number, emoji: string): Promise<void> {
     try {
       await this.call("setMessageReaction", {
         chat_id: chatId,
@@ -251,6 +250,23 @@ export class TgApi {
 
   async sendDocument(chatId: number, filePath: string, caption?: string): Promise<void> {
     await this.sendFile("sendDocument", chatId, filePath, caption);
+  }
+
+  async editMessage(chatId: number, messageId: number, text: string): Promise<void> {
+    await this.call("editMessageText", {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      disable_web_page_preview: true,
+    });
+  }
+
+  async deleteMessage(chatId: number, messageId: number): Promise<void> {
+    try {
+      await this.call("deleteMessage", { chat_id: chatId, message_id: messageId }, 10_000);
+    } catch {
+      // Best-effort (already deleted, too old, or no rights).
+    }
   }
 }
 

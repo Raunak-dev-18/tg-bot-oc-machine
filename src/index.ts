@@ -172,6 +172,16 @@ async function main(): Promise<void> {
     healthServer.listen(config.healthPort, "0.0.0.0", () =>
       console.log(`[health] listening on :${config.healthPort}`),
     );
+    healthServer.on("error", (err) => {
+      // Port clash (e.g. a stale instance) must never kill the bot.
+      console.error(`[health] cannot listen on :${config.healthPort}: ${(err as Error).message}`);
+      try {
+        healthServer?.close();
+      } catch {
+        /* ignore */
+      }
+      healthServer = undefined;
+    });
   }
 
   /** Self-heal: restart the background server if it died; fall back to direct runs. */
@@ -327,6 +337,50 @@ async function main(): Promise<void> {
     }
   }
 
+  /** Live "still working" status bubble, edited as the run progresses. */
+  function makeStatus(chatId: number, replyTo: number | undefined) {
+    let id: number | undefined;
+    let lastSent = "";
+    let lastEditAt = 0;
+    let activity = "warming up…";
+    const fmt = (sec: number) =>
+      sec < 60 ? `${sec}s` : `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, "0")}s`;
+    return {
+      note(text: string) {
+        activity = text.slice(0, 120);
+      },
+      async start() {
+        try {
+          id = (await api.sendMessage(chatId, "⏳ Working on it…", replyTo)).message_id;
+          lastSent = "⏳ Working on it…";
+        } catch {
+          id = undefined;
+        }
+      },
+      async tick(startedAt: number) {
+        if (id === undefined) return;
+        const elapsed = Math.round((Date.now() - startedAt) / 1000);
+        if (elapsed - lastEditAt < 45) return;
+        lastEditAt = elapsed;
+        const text = `⏳ Still working… (${fmt(elapsed)})\n${activity}`;
+        if (text === lastSent) return;
+        lastSent = text;
+        try {
+          await api.editMessage(chatId, id, text);
+        } catch {
+          id = undefined; // message gone — stop trying
+        }
+      },
+      async done() {
+        if (id !== undefined) {
+          const target = id;
+          id = undefined;
+          await api.deleteMessage(chatId, target);
+        }
+      },
+    };
+  }
+
   /** Shared pipeline: prompt (+optional files) → opencode → reply + ASK buttons. */
   async function forwardToOpencode(
     chatId: number,
@@ -340,7 +394,10 @@ async function main(): Promise<void> {
       return;
     }
     busyChats.add(chatId);
+    const status = makeStatus(chatId, replyTo);
+    await status.start();
     const typingTimer = setInterval(() => void api.sendChatAction(chatId, "typing"), 4000);
+    let statusTick: NodeJS.Timeout | undefined;
     const progressTimer = { lastNote: 0 };
     const outboxBefore = new Set<string>(await readdir(config.outboxDir).catch(() => [] as string[]));
     await refreshServe();
@@ -348,6 +405,7 @@ async function main(): Promise<void> {
     try {
       await api.sendChatAction(chatId, "typing");
       const t0 = Date.now();
+      statusTick = setInterval(() => void status.tick(t0), 10000);
       const chatKey = String(chatId);
       const state = store.getChat(chatKey);
       const isNewSession = !state.sessionId;
@@ -373,6 +431,7 @@ async function main(): Promise<void> {
         memory: isNewSession ? await loadMemoryContext(config.dataDir) : undefined,
         cancel: ctrl,
         onProgress: (note) => {
+          status.note(note);
           const now = Date.now();
           if (now - progressTimer.lastNote > 20_000) {
             progressTimer.lastNote = now;
@@ -430,6 +489,8 @@ async function main(): Promise<void> {
       }
     } finally {
       clearInterval(typingTimer);
+      if (statusTick) clearInterval(statusTick);
+      await status.done();
       busyChats.delete(chatId);
       untrackRun(chatId, ctrl);
     }
@@ -826,10 +887,15 @@ async function main(): Promise<void> {
       }
       busyChats.add(chatId);
       const typingTimer = setInterval(() => void api.sendChatAction(chatId, "typing"), 4000);
+      const batchStatus = makeStatus(chatId, replyTo);
+      let batchTick: NodeJS.Timeout | undefined;
       try {
         await refreshServe();
         await api.react(chatId, replyTo, "👀");
         await api.sendMessage(chatId, `🔀 Running ${tasks.length} tasks in parallel…`, replyTo);
+        await batchStatus.start();
+        const batchT0 = Date.now();
+        batchTick = setInterval(() => void batchStatus.tick(batchT0), 10000);
         const chatState = store.getChat(chatKey);
         const mem = await loadMemoryContext(config.dataDir);
         const memPaths = memoryPaths(config.dataDir);
@@ -883,6 +949,8 @@ async function main(): Promise<void> {
         await api.react(chatId, replyTo, lastEmoji ?? "👍");
       } finally {
         clearInterval(typingTimer);
+        if (batchTick) clearInterval(batchTick);
+        await batchStatus.done();
         busyChats.delete(chatId);
       }
       return;

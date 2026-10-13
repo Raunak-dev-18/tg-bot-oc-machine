@@ -66,7 +66,11 @@ is prepended to your prompt, capped at 1000 chars, works for photos/files too). 
 this one" finally understands what "this" is.
 
 Replies are chunked to Telegram's limits automatically and end with a
-`— done in Xs · tokens …` footer. While it works you'll see the typing indicator.
+`— done in Xs · tokens …` footer. While it works you'll see the typing indicator
+plus a live `⏳ Working…` bubble that edits itself every ~45s with elapsed time and
+current activity (`using tool bash…`) — long tasks never look dead. The bubble is
+deleted when the answer lands. Your message gets 👀 on pickup, the agent's own
+emotional `REACT:` emoji (or 👍) when done, 👎 on failure.
 
 **Agent questions → buttons.** When the agent is blocked on a decision it sends
 `❓` messages with tappable inline buttons (up to 3 questions per reply, 6 options

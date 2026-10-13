@@ -43,6 +43,9 @@ npm run build
 TELEGRAM_BOT_TOKEN=<token> WORK_DIR=/path/to/your/project npm start
 ```
 
+Keep it alive free: `setsid ./run.sh >>bot.log 2>&1 < /dev/null &`
+(supervisor — restarts on crash; `touch STOP` to stop).
+
 ## Configuration (env vars)
 
 | Var | Default | Purpose |

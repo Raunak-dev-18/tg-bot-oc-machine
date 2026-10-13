@@ -266,6 +266,11 @@ mouse/keyboard control of GUI apps is out of scope — browser + shell cover it.
 
 A Replit workspace sleeps when idle — nothing inside it can prevent that. Your options:
 
+0. **Free: keep the workspace tab open + supervisor.** An open tab keeps Replit's
+   machine awake; `run.sh` (included) restarts the bot on any crash with backoff:
+   `setsid ./run.sh >>bot.log 2>&1 < /dev/null &`. Secrets come from env or a
+   gitignored `.env` (see `.env.example`) — never hardcoded. Stop cleanly with
+   `touch STOP`. I proved this by `kill -9`ing the bot: it rebooted itself in seconds.
 1. **Cheapest reliable: a small VPS** (~$5/mo, Hetzner/Contabo/DigitalOcean). Clone this
    repo there and follow [AGENTS.md](./AGENTS.md) §3–§4 (systemd unit included). This is
    the recommended path for a bot that must never sleep.

@@ -81,6 +81,32 @@ export function stripSendBlocks(text: string): string {
   return text.replace(SEND_RE, "").replace(/\n{3,}/g, "\n\n").trim();
 }
 
+export interface ThinkBlock {
+  thinking: string;
+  cleaned: string;
+}
+
+const THINK_RE = /<(think|thinking)>([\s\S]*?)(?:<\/\1>|$)/gi;
+const STRAY_THINK_RE = /<\/?think(?:ing)?>/gi;
+
+/**
+ * Some models inline chain-of-thought as <think>…</think> inside text parts.
+ * Extract it for the collapsible block; never show it raw.
+ */
+export function parseThinkBlocks(text: string): ThinkBlock {
+  const parts: string[] = [];
+  THINK_RE.lastIndex = 0;
+  const cleaned = text.replace(THINK_RE, (_m, _tag: string, body: string) => {
+    const t = body.trim();
+    if (t) parts.push(t);
+    return "\n";
+  });
+  return {
+    thinking: parts.join("\n\n").slice(0, 3000),
+    cleaned: cleaned.replace(STRAY_THINK_RE, "").replace(/\n{3,}/g, "\n\n").trim(),
+  };
+}
+
 /**
  * AI-chosen reaction. The agent ends its reply with a final line:
  *   REACT: 🔥

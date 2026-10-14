@@ -10,7 +10,7 @@ import path from "node:path";
 import { ensureBotConfigHome } from "./botconfig.js";
 import { computeNext, describeSpec, formatNext, parseSpec } from "./cron.js";
 import { loadConfig } from "./config.js";
-import { PendingQuestions, parseAskBlocks, parseReactLine, parseSendBlocks, stripAskBlocks, stripSendBlocks } from "./interact.js";
+import { PendingQuestions, parseAskBlocks, parseReactLine, parseSendBlocks, parseThinkBlocks, stripAskBlocks, stripSendBlocks } from "./interact.js";
 import { loadMemoryContext, memoryPaths, readMemoryFile, rememberFact } from "./memory.js";
 import { getVerboseModels, listPlainModels, listSessions, lookupModel, recallSessions, findLatestSession } from "./models.js";
 import { loadSkills, skillsCatalog } from "./skills.js";
@@ -407,6 +407,22 @@ async function main(): Promise<void> {
     }
   }
 
+  /**
+   * Send with Telegram-native formatting when it fits one bubble (HTML with
+   * plain-text fallback), plain chunked otherwise (HTML can't span chunks safely).
+   */
+  async function sendFormatted(chatId: number, text: string, replyTo?: number): Promise<void> {
+    if (text.length <= 3900) {
+      try {
+        await api.sendHtml(chatId, text, replyTo);
+        return;
+      } catch {
+        /* fall through to plain chunked */
+      }
+    }
+    await sendReply(chatId, text, replyTo);
+  }
+
   /** Live "still working" status bubble, edited as the run progresses.
    * Doubles as the streaming surface: once answer text flows, the bubble
    * shows it live (Telegram has no true streaming API — message edits at a
@@ -688,14 +704,22 @@ async function main(): Promise<void> {
       console.log(`[opencode] chat ${chatId}: done in ${secs}s${chunkNote}, session ${result.sessionId ?? "?"}, ${result.text.length} chars`);
 
       const reacted = parseReactLine(result.text);
-      const questions = parseAskBlocks(reacted.cleaned);
-      const sends = parseSendBlocks(reacted.cleaned);
-      const body = stripSendBlocks(stripAskBlocks(reacted.cleaned));
+      const thought = parseThinkBlocks(reacted.cleaned);
+      const questions = parseAskBlocks(thought.cleaned);
+      const sends = parseSendBlocks(thought.cleaned);
+      const body = stripSendBlocks(stripAskBlocks(thought.cleaned));
       const footer =
         result.tokens || result.cost !== undefined
           ? `\n\n— done in ${secs}s${chunkNote}${result.tokens ? ` · tokens ${result.tokens.input}in/${result.tokens.output}out` : ""}${result.cost !== undefined ? ` · $${result.cost.toFixed(4)}` : ""}`
           : `\n\n— done in ${secs}s${chunkNote}`;
-      if (body) await sendReply(chatId, body + (questions.length > 0 ? "" : footer), replyTo);
+      if (body) await sendFormatted(chatId, body + (questions.length > 0 ? "" : footer), replyTo);
+      if (thought.thinking) {
+        await api.sendHtml(
+          chatId,
+          `💭 <b>Thinking</b>\n<blockquote expandable>${TgApi.escapeHtml(thought.thinking)}</blockquote>`,
+          undefined,
+        );
+      }
       const sentPaths = await deliverSendFiles(chatId, sends);
       await deliverOutbox(chatId, await collectOutbox(outboxBefore), sentPaths);
 
@@ -1183,16 +1207,17 @@ async function main(): Promise<void> {
           }
           const reacted = parseReactLine(r.result.text);
           if (reacted.emoji) lastEmoji = reacted.emoji;
-          const questions = parseAskBlocks(reacted.cleaned);
-          const sends = parseSendBlocks(reacted.cleaned);
-          let body = stripSendBlocks(stripAskBlocks(reacted.cleaned));
+          const thought = parseThinkBlocks(reacted.cleaned);
+          const questions = parseAskBlocks(thought.cleaned);
+          const sends = parseSendBlocks(thought.cleaned);
+          let body = stripSendBlocks(stripAskBlocks(thought.cleaned));
           if (!body.trim() && questions.length === 0 && sends.length === 0) {
             body = "(empty reply from the model — flaky free tier, run it again or /new)";
           }
           for (const q of questions) {
             body += `\n\n❓ ${q.question}${q.options.length > 0 ? ` (options: ${q.options.join(" / ")})` : " (reply to answer)"}`;
           }
-          await api.sendChunked(chatId, `🔀 Task ${r.i + 1}/${tasks.length}: ${r.task}\n\n${body}`);
+          await sendFormatted(chatId, `🔀 Task ${r.i + 1}/${tasks.length}: ${r.task}\n\n${body}`);
           for (const s of await deliverSendFiles(chatId, sends)) sentPaths.add(s);
         }
         await deliverOutbox(chatId, await collectOutbox(outboxBefore), sentPaths);

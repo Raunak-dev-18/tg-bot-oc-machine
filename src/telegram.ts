@@ -169,7 +169,7 @@ export class TgApi {
     }
   }
 
-  async sendMessage(chatId: number, text: string, replyTo?: number, replyMarkup?: ReplyMarkup): Promise<TgMessage> {
+  async sendMessage(chatId: number, text: string, replyTo?: number, replyMarkup?: ReplyMarkup, parseMode?: "HTML"): Promise<TgMessage> {
     const payload: Record<string, unknown> = {
       chat_id: chatId,
       text,
@@ -177,9 +177,38 @@ export class TgApi {
     };
     if (replyTo !== undefined) payload.reply_to_message_id = replyTo;
     if (replyMarkup !== undefined) payload.reply_markup = replyMarkup;
+    if (parseMode !== undefined) payload.parse_mode = parseMode;
     const sent = await this.call<TgMessage>("sendMessage", payload);
     this.rememberSent(chatId, sent.message_id, text);
     return sent;
+  }
+
+  /** Escape raw text for Telegram HTML parse mode. */
+  static escapeHtml(text: string): string {
+    return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  /**
+   * Send as Telegram HTML; fall back to plain text if parsing fails
+   * (e.g. stray markup from the model). Never throws for parse errors.
+   */
+  async sendHtml(chatId: number, html: string, replyTo?: number): Promise<void> {
+    try {
+      await this.sendMessage(chatId, html, replyTo, undefined, "HTML");
+    } catch (err) {
+      if (/parse|markup|entities/i.test((err as Error).message)) {
+        const plain = html
+          .replace(/<\/?(?:b|i|u|s|code|pre|blockquote[^>]*)>/gi, "")
+          .replace(/<a\s+href="[^"]*">/gi, "")
+          .replace(/<\/a>/gi, "")
+          .replace(/&lt;/g, "<")
+          .replace(/&gt;/g, ">")
+          .replace(/&amp;/g, "&");
+        await this.sendMessage(chatId, plain, replyTo);
+      } else {
+        throw err;
+      }
+    }
   }
 
   /** What did we recently send as message_id in chatId? (for reaction context) */

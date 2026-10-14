@@ -93,6 +93,10 @@ completed step, so long agentic runs stream part-by-part while short answers arr
 The bubble is deleted when the final chunked reply lands. Your message gets 👀 on pickup,
 the agent's own emotional `REACT:` emoji (or 👍) when done, 👎 on failure.
 
+Replies render with Telegram-native formatting (`<b> <i> <code> <pre>`, links) with
+automatic plain-text fallback. Model thinking (`<think>` blocks) never leaks raw — it's
+delivered as a collapsed 💭 block you can tap to expand.
+
 **Agent questions → buttons.** When the agent is blocked on a decision it sends
 `❓` messages with tappable inline buttons (up to 3 questions per reply, 6 options
 each). Tap one — your answer flows back into the same session and work continues.

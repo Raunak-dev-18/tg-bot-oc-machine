@@ -209,6 +209,7 @@ export function runOpencode(opts: RunOpts): Promise<RunResult> {
     let sessionId: string | undefined;
     let cost: number | undefined;
     let tokens: { input: number; output: number } | undefined;
+    let modelError: string | undefined;
     let eventCount = 0;
     let settled = false;
 
@@ -232,6 +233,10 @@ export function runOpencode(opts: RunOpts): Promise<RunResult> {
       }
       eventCount++;
       if (ev.sessionID && !sessionId) sessionId = ev.sessionID;
+      if (ev.type === "error") {
+        const errObj = (ev as unknown as { error?: { data?: { message?: string }; message?: string } }).error;
+        modelError = errObj?.data?.message || errObj?.message || "unknown provider error";
+      }
       if (ev.type === "text" && typeof ev.part?.text === "string") {
         texts.push(ev.part.text);
         try {
@@ -284,6 +289,12 @@ export function runOpencode(opts: RunOpts): Promise<RunResult> {
         // NOTE: text may be legitimately empty (flaky model) — callers detect
         // emptiness and retry. Never substitute a placeholder here: it would
         // mask real emptiness from retry guards.
+        // BUT: a provider error with exit 0 is NOT a flake — surface it loudly
+        // (e.g. deprecated model) so it never masquerades as an empty reply.
+        if (!text && modelError) {
+          reject(new Error(modelError.slice(0, 500)));
+          return;
+        }
         resolve({
           text,
           sessionId,

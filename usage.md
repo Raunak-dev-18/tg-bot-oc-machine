@@ -173,6 +173,8 @@ command names forbid hyphens; both spellings work in chat).
 - **Empty-reply retry** — free models occasionally return zero text; the bot retries once in
   the same session automatically, and only errors if both come back empty. Voice notes never
   speak placeholders.
+- **Provider errors surface loudly** — a dead/deprecated model (exit 0 + error event) is
+  reported with the provider's own message instead of masquerading as an empty reply.
 - **Background** — `/bg <task>` runs with chat free (fresh session, same memory/skills).
   Max 3 per chat. Result lands here when done; `/stop` cancels.
 - **Restart-proof** — every started run is journaled (`/jobs` lists them). If the bot

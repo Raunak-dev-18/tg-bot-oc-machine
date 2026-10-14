@@ -102,7 +102,8 @@ const OPS_SYSTEM_PREFIX = [
   "Format replies with Telegram HTML: you may use <b>, <i>, <code>, <pre>, <a href=\"…\"> —",
   "nothing else. Never emit raw <, > or & outside those tags, never use markdown (*, #, backticks).",
   "Keep ALL reasoning in <think>…</think> blocks (shown collapsed, never inline) — the visible",
-  "reply must contain only the answer.",
+  "reply must contain only the answer. NEVER narrate internal monologue as plain sentences",
+  "(no \"The operator says…\", \"I should…\", \"Should I…\" in visible text — that belongs in <think>).",
   "No markdown tables. Report what you did + the key outcome (URLs, ports, PIDs, file paths).",
   "If a task is long, do it fully and summarize. Never ask for confirmation — proceed.",
   "Only stop to ask when you are genuinely blocked on an operator decision",
@@ -215,7 +216,7 @@ export function runOpencode(opts: RunOpts): Promise<RunResult> {
       if (!settled) {
         settled = true;
         child.kill("SIGKILL");
-        reject(new TimeoutError(texts.join("").trim(), sessionId, opts.timeoutMs));
+        reject(new TimeoutError(texts.join("\n").trim(), sessionId, opts.timeoutMs));
       }
     }, opts.timeoutMs);
     timer.unref?.();
@@ -234,7 +235,7 @@ export function runOpencode(opts: RunOpts): Promise<RunResult> {
       if (ev.type === "text" && typeof ev.part?.text === "string") {
         texts.push(ev.part.text);
         try {
-          opts.onText?.(texts.join(""));
+          opts.onText?.(texts.join("\n"));
         } catch {
           /* streaming callback must never break the run */
         }
@@ -278,7 +279,7 @@ export function runOpencode(opts: RunOpts): Promise<RunResult> {
         return;
       }
       if (stdoutBuffer.trim()) handleLine(stdoutBuffer.trim());
-      const text = texts.join("").trim();
+      const text = texts.join("\n").trim();
       if (code === 0) {
         // NOTE: text may be legitimately empty (flaky model) — callers detect
         // emptiness and retry. Never substitute a placeholder here: it would

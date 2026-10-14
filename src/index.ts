@@ -10,7 +10,7 @@ import path from "node:path";
 import { ensureBotConfigHome } from "./botconfig.js";
 import { computeNext, describeSpec, formatNext, parseSpec } from "./cron.js";
 import { loadConfig } from "./config.js";
-import { PendingQuestions, parseAskBlocks, parseReactLine, parseSendBlocks, parseThinkBlocks, stripAskBlocks, stripSendBlocks } from "./interact.js";
+import { PendingQuestions, parseAskBlocks, parseReactLine, parseSendBlocks, parseThinkBlocks, splitUnmarkedThinking, stripAskBlocks, stripSendBlocks } from "./interact.js";
 import { loadMemoryContext, memoryPaths, readMemoryFile, rememberFact } from "./memory.js";
 import { getVerboseModels, listPlainModels, listSessions, lookupModel, recallSessions, findLatestSession } from "./models.js";
 import { loadSkills, skillsCatalog } from "./skills.js";
@@ -704,19 +704,21 @@ async function main(): Promise<void> {
       console.log(`[opencode] chat ${chatId}: done in ${secs}s${chunkNote}, session ${result.sessionId ?? "?"}, ${result.text.length} chars`);
 
       const reacted = parseReactLine(result.text);
-      const thought = parseThinkBlocks(reacted.cleaned);
-      const questions = parseAskBlocks(thought.cleaned);
-      const sends = parseSendBlocks(thought.cleaned);
-      const body = stripSendBlocks(stripAskBlocks(thought.cleaned));
+      const tagged = parseThinkBlocks(reacted.cleaned);
+      const unmarked = splitUnmarkedThinking(tagged.cleaned);
+      const thinking = [tagged.thinking, unmarked.thinking].filter(Boolean).join("\n\n").slice(0, 3000);
+      const questions = parseAskBlocks(unmarked.cleaned);
+      const sends = parseSendBlocks(unmarked.cleaned);
+      const body = stripSendBlocks(stripAskBlocks(unmarked.cleaned));
       const footer =
         result.tokens || result.cost !== undefined
           ? `\n\n— done in ${secs}s${chunkNote}${result.tokens ? ` · tokens ${result.tokens.input}in/${result.tokens.output}out` : ""}${result.cost !== undefined ? ` · $${result.cost.toFixed(4)}` : ""}`
           : `\n\n— done in ${secs}s${chunkNote}`;
       if (body) await sendFormatted(chatId, body + (questions.length > 0 ? "" : footer), replyTo);
-      if (thought.thinking) {
+      if (thinking) {
         await api.sendHtml(
           chatId,
-          `💭 <b>Thinking</b>\n<blockquote expandable>${TgApi.escapeHtml(thought.thinking)}</blockquote>`,
+          `💭 <b>Thinking</b>\n<blockquote expandable>${TgApi.escapeHtml(thinking)}</blockquote>`,
           undefined,
         );
       }
@@ -1207,10 +1209,11 @@ async function main(): Promise<void> {
           }
           const reacted = parseReactLine(r.result.text);
           if (reacted.emoji) lastEmoji = reacted.emoji;
-          const thought = parseThinkBlocks(reacted.cleaned);
-          const questions = parseAskBlocks(thought.cleaned);
-          const sends = parseSendBlocks(thought.cleaned);
-          let body = stripSendBlocks(stripAskBlocks(thought.cleaned));
+          const tagged = parseThinkBlocks(reacted.cleaned);
+          const unmarked = splitUnmarkedThinking(tagged.cleaned);
+          const questions = parseAskBlocks(unmarked.cleaned);
+          const sends = parseSendBlocks(unmarked.cleaned);
+          let body = stripSendBlocks(stripAskBlocks(unmarked.cleaned));
           if (!body.trim() && questions.length === 0 && sends.length === 0) {
             body = "(empty reply from the model — flaky free tier, run it again or /new)";
           }

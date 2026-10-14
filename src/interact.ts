@@ -89,6 +89,42 @@ export interface ThinkBlock {
 const THINK_RE = /<(think|thinking)>([\s\S]*?)(?:<\/\1>|$)/gi;
 const STRAY_THINK_RE = /<\/?think(?:ing)?>/gi;
 
+// Protocol leakage — these tokens never belong in a visible reply.
+const PROTOCOL_RE = /:::ASK|REACT:|SEND block/i;
+// Infra mentions — mildly meta, weak signal on their own.
+const INFRA_RE = /\boutbox\b|MEMORY\.md|SKILL\.md/i;
+// "The operator says …" as an opener — quoting the user to oneself.
+const QUOTE_SELF_RE = /^(the operator says|the user (says|wants|is asking))/i;
+// Deliberation openers.
+const DELIBERATE_RE = /^(so no task|okay,? so|i should|i need to|i('ll| will)|let me |should i|do i need|no need for|keep it (short|brief)|could |might |maybe i|not necessary)/i;
+
+function thinkingScore(sentence: string): number {
+  const s = sentence.trim();
+  if (!s) return 0;
+  if (PROTOCOL_RE.test(s)) return 2;
+  if (QUOTE_SELF_RE.test(s)) return 2;
+  if (INFRA_RE.test(s) || DELIBERATE_RE.test(s)) return 1;
+  return 0;
+}
+
+function splitSentences(text: string): string[] {
+  const raw =
+    text.match(/[^.!?।\n]+[.!?।]+["']?|[^.!?।\n]+$/g)?.map((s) => s.trim()).filter(Boolean) ?? [text];
+  // Don't split filenames: "gmaps-fixed." + "html is delivered" → rejoin when the
+  // next fragment starts with a lowercase file-extension-like token.
+  const EXT_RE = /^(html?|js|ts|tsx|jsx|json|md|mkd|png|jp?g|gif|webp|txt|pdf|py|sh|yml|yaml|xml|css|mp3|mp4|ogg|oga|csv|xlsx?|pptx?|doc|log)\b/;
+  const out: string[] = [];
+  for (const frag of raw) {
+    const prev = out[out.length - 1];
+    if (prev && EXT_RE.test(frag) && /[A-Za-z0-9_-]+\.$/.test(prev)) {
+      out[out.length - 1] = `${prev}${frag}`;
+    } else {
+      out.push(frag);
+    }
+  }
+  return out;
+}
+
 /**
  * Some models inline chain-of-thought as <think>…</think> inside text parts.
  * Extract it for the collapsible block; never show it raw.
@@ -105,6 +141,39 @@ export function parseThinkBlocks(text: string): ThinkBlock {
     thinking: parts.join("\n\n").slice(0, 3000),
     cleaned: cleaned.replace(STRAY_THINK_RE, "").replace(/\n{3,}/g, "\n\n").trim(),
   };
+}
+
+/**
+ * Unmarked thinking: some models narrate reasoning as plain leading sentences
+ * ("The operator says… I should… No need for :::ASK…") with no tags.
+ * If the reply OPENS with strong self-talk, move the leading deliberation run
+ * into the thinking block (one short factual gap sentence tolerated).
+ * Conservative: needs a strong opener and either 3+ sentences or protocol
+ * leakage, and always leaves ≥1 sentence. Legit answers are never touched:
+ * they don't open with self-talk, and single-sentence runs revert.
+ */
+export function splitUnmarkedThinking(text: string): ThinkBlock {
+  const sentences = splitSentences(text);
+  if (sentences.length < 2 || thinkingScore(sentences[0]) < 2) return { thinking: "", cleaned: text };
+  let runEnd = 0;
+  let gaps = 0;
+  let hasProtocol = false;
+  for (let i = 0; i < sentences.length - 1; i++) {
+    const score = thinkingScore(sentences[i]);
+    if (score >= 1) {
+      runEnd = i + 1;
+      gaps = 0;
+      if (PROTOCOL_RE.test(sentences[i])) hasProtocol = true;
+    } else {
+      gaps++;
+      if (gaps > 1) break;
+    }
+  }
+  if (runEnd < 3 && !hasProtocol) return { thinking: "", cleaned: text };
+  const thinking = sentences.slice(0, runEnd).join(" ");
+  const cleaned = sentences.slice(runEnd).join(" ");
+  if (!cleaned.trim()) return { thinking: "", cleaned: text };
+  return { thinking: thinking.slice(0, 3000), cleaned };
 }
 
 /**

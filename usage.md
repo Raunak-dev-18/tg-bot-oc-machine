@@ -94,8 +94,9 @@ The bubble is deleted when the final chunked reply lands. Your message gets 👀
 the agent's own emotional `REACT:` emoji (or 👍) when done, 👎 on failure.
 
 Replies render with Telegram-native formatting (`<b> <i> <code> <pre>`, links) with
-automatic plain-text fallback. Model thinking (`<think>` blocks) never leaks raw — it's
-delivered as a collapsed 💭 block you can tap to expand.
+automatic plain-text fallback. Model thinking never leaks raw: `<think>` blocks go to a
+collapsed 💭 block — and so does *unmarked* thinking (plain "The operator says… I
+should…" deliberation is detected by pattern and moved there too, filenames kept intact).
 
 **Agent questions → buttons.** When the agent is blocked on a decision it sends
 `❓` messages with tappable inline buttons (up to 3 questions per reply, 6 options

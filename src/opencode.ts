@@ -39,6 +39,8 @@ export interface RunResult {
   text: string;
   sessionId?: string;
   tokens?: { input: number; output: number };
+  /** Final-step prompt size (total - output) — i.e. current context usage. */
+  contextTokens?: number;
   cost?: number;
   durationMs: number;
 }
@@ -209,6 +211,7 @@ export function runOpencode(opts: RunOpts): Promise<RunResult> {
     let sessionId: string | undefined;
     let cost: number | undefined;
     let tokens: { input: number; output: number } | undefined;
+    let contextTokens: number | undefined;
     let modelError: string | undefined;
     let eventCount = 0;
     let settled = false;
@@ -247,9 +250,16 @@ export function runOpencode(opts: RunOpts): Promise<RunResult> {
       }
       if (ev.type === "step_finish") {
         const part = ev.part as unknown as
-          | { tokens?: { input: number; output: number; total: number }; cost?: number }
+          | { tokens?: { input: number; output: number; total?: number; reasoning?: number }; cost?: number }
           | undefined;
-        if (part?.tokens) tokens = { input: part.tokens.input, output: part.tokens.output };
+        if (part?.tokens) {
+          tokens = { input: part.tokens.input, output: part.tokens.output };
+          // total = input + cache + reasoning + output; prompt re-sent next turn
+          // ≈ total - output (reasoning kept — conservative, triggers early).
+          if (typeof part.tokens.total === "number") {
+            contextTokens = Math.max(0, part.tokens.total - (part.tokens.output ?? 0));
+          }
+        }
         if (typeof part?.cost === "number") cost = part.cost;
       }
       const note = summarizeEventType(ev);
@@ -299,6 +309,7 @@ export function runOpencode(opts: RunOpts): Promise<RunResult> {
           text,
           sessionId,
           tokens,
+          contextTokens,
           cost,
           durationMs: Date.now() - startedAt,
         });

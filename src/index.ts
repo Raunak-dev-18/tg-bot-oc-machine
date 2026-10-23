@@ -8,6 +8,7 @@ import { mkdir, readdir, stat } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
 import { ensureBotConfigHome } from "./botconfig.js";
+import { sessionContextTokens, splitModelId, summarizeSession } from "./compact.js";
 import { computeNext, describeSpec, formatNext, parseSpec } from "./cron.js";
 import { loadConfig } from "./config.js";
 import { PendingQuestions, parseAskBlocks, parseReactLine, parseSendBlocks, parseThinkBlocks, splitUnmarkedThinking, stripAskBlocks, stripSendBlocks } from "./interact.js";
@@ -39,6 +40,7 @@ const HELP_TEXT = [  "🤖 Remote machine control via opencode",
   "install things, run and deploy apps. Files it produces (screenshots,",
   "reports) are delivered back here automatically.",
   "When the agent needs a decision, you'll get tappable option buttons.",
+  "Long sessions auto-compact at 85% of the model's context (footer shows ctx usage).",
   "Tip: reply (swipe) to any older message — mine or yours — and I'll know exactly what you mean.",
   "React to my replies (👍/👎…) — I notice and learn. I react with what I feel.",
   "",
@@ -258,6 +260,10 @@ async function main(): Promise<void> {
   const startedAt = Date.now();
   const busyChats = new Set<number>();  /** In-flight opencode runs per chat (for /stop cancellation). */
   const running = new Map<number, RunCancel[]>();
+  /** Sessions measured pre-run at least once this process (bounds /message fetches). */
+  const compactChecked = new Set<string>();
+  /** Per-session cooldown so auto-compaction can't loop on a stubborn session. */
+  const lastCompactAt = new Map<string, number>();
 
   function trackRun(chatId: number): RunCancel {
     const ctrl: RunCancel = { killed: false };
@@ -494,6 +500,7 @@ async function main(): Promise<void> {
     text: string;
     sessionId?: string;
     tokens?: { input: number; output: number };
+    contextTokens?: number;
     cost?: number;
     chunks: number;
     partial: boolean;
@@ -529,6 +536,7 @@ async function main(): Promise<void> {
     let isNew = opts.isNewSession;
     let combined = "";
     let tokens: { input: number; output: number } | undefined;
+    let contextTokens: number | undefined;
     let cost: number | undefined;
     for (let n = 1; n <= opts.maxChunks; n++) {
       try {
@@ -556,9 +564,10 @@ async function main(): Promise<void> {
         });
         if (r.text.trim()) combined += (combined ? "\n" : "") + r.text.trim();
         tokens = r.tokens ?? tokens;
+        contextTokens = r.contextTokens ?? contextTokens;
         cost = r.cost ?? cost;
         if (r.sessionId) sessionId = r.sessionId;
-        return { text: combined.trim(), sessionId, tokens, cost, chunks: n, partial: false };
+        return { text: combined.trim(), sessionId, tokens, contextTokens, cost, chunks: n, partial: false };
       } catch (err) {
         if (!(err instanceof TimeoutError)) throw err;
         if (err.partialText.trim()) combined += (combined ? "\n" : "") + err.partialText.trim();
@@ -566,7 +575,7 @@ async function main(): Promise<void> {
         if (n >= opts.maxChunks) {
           // Out of chunks: deliver everything produced so far instead of erroring.
           if (combined.trim()) {
-            return { text: combined.trim(), sessionId, tokens, cost, chunks: n, partial: true };
+            return { text: combined.trim(), sessionId, tokens, contextTokens, cost, chunks: n, partial: true };
           }
           throw err;
         }
@@ -679,6 +688,46 @@ async function main(): Promise<void> {
           files: fileList,
           memory: fresh ? await loadMemoryContext(config.dataDir) : undefined,
         });
+      // Context guard: model context window for this chat (cached model metadata).
+      const effectiveModel = state.model ?? config.model;
+      const modelInfo = effectiveModel
+        ? await lookupModel({ bin: config.opencodeBin, cwd: config.workDir, dataDir: config.dataDir, id: effectiveModel })
+        : undefined;
+      const contextLimit = modelInfo?.contextK ? modelInfo.contextK * 1000 : undefined;
+      const kfmt = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`);
+      const modelCandidates = () => {
+        const list = effectiveModel ? [splitModelId(effectiveModel)] : [];
+        if (config.model && config.model !== effectiveModel) list.push(splitModelId(config.model));
+        return list;
+      };
+      /** Summarize one session (cooldown-guarded). Returns true when compacted. */
+      const doCompact = async (sid: string, used: number, note: string): Promise<boolean> => {
+        const now = Date.now();
+        if (now - (lastCompactAt.get(sid) ?? 0) < 120_000) return false;
+        if (!attachUrl) return false;
+        lastCompactAt.set(sid, now);
+        status.note(note);
+        const pct = Math.round((used / contextLimit!) * 100);
+        console.log(`[compact] chat ${chatId}: context ${pct}% (${used}/${contextLimit}) — summarizing ${sid}`);
+        try {
+          const ok = await summarizeSession(attachUrl, sid, modelCandidates());
+          console.log(`[compact] chat ${chatId}: ${ok ? "summarized" : "no summary produced"}`);
+          return ok;
+        } catch (err) {
+          console.warn(`[compact] chat ${chatId}: failed — ${(err as Error).message}`);
+          return false;
+        }
+      };
+      // Pre-run: first message on this session since bot start — if it already
+      // sits ≥ compactAt% (legacy/unmeasured session), compact BEFORE the run
+      // so this turn cannot blow the window. Measured once per session/process.
+      if (!background && state.sessionId && attachUrl && contextLimit && !compactChecked.has(state.sessionId)) {
+        compactChecked.add(state.sessionId);
+        const used = await sessionContextTokens(attachUrl, state.sessionId);
+        if (used && used >= (config.compactAt / 100) * contextLimit) {
+          await doCompact(state.sessionId, used, "context is high — compacting before replying…");
+        }
+      }
       let result = await runOnce(prompt, state.sessionId, isNewSession, files);
       const isEmpty = (text: string) =>
         stripSendBlocks(stripAskBlocks(parseReactLine(text).cleaned)).trim() === "" &&
@@ -710,10 +759,14 @@ async function main(): Promise<void> {
       const questions = parseAskBlocks(unmarked.cleaned);
       const sends = parseSendBlocks(unmarked.cleaned);
       const body = stripSendBlocks(stripAskBlocks(unmarked.cleaned));
+      const ctxNote =
+        result.contextTokens && contextLimit
+          ? ` · ctx ${kfmt(result.contextTokens)}/${kfmt(contextLimit)} (${Math.round((result.contextTokens / contextLimit) * 100)}%)`
+          : "";
       const footer =
         result.tokens || result.cost !== undefined
-          ? `\n\n— done in ${secs}s${chunkNote}${result.tokens ? ` · tokens ${result.tokens.input}in/${result.tokens.output}out` : ""}${result.cost !== undefined ? ` · $${result.cost.toFixed(4)}` : ""}`
-          : `\n\n— done in ${secs}s${chunkNote}`;
+          ? `\n\n— done in ${secs}s${chunkNote}${ctxNote}${result.tokens ? ` · tokens ${result.tokens.input}in/${result.tokens.output}out` : ""}${result.cost !== undefined ? ` · $${result.cost.toFixed(4)}` : ""}`
+          : `\n\n— done in ${secs}s${chunkNote}${ctxNote}`;
       if (body) await sendFormatted(chatId, body + (questions.length > 0 ? "" : footer), replyTo);
       if (thinking) {
         await api.sendHtml(
@@ -740,6 +793,18 @@ async function main(): Promise<void> {
       }
       if (questions.length > 0 && !body) await api.sendMessage(chatId, footer.trim());
       if (reactTo !== undefined) await api.react(chatId, reactTo, reacted.emoji ?? "👍");
+      // Auto-compaction: reply is already delivered — now, if this run pushed
+      // the context past compactAt%, summarize the session for next time.
+      if (result.contextTokens && contextLimit && result.sessionId && result.contextTokens >= (config.compactAt / 100) * contextLimit) {
+        const pct = Math.round((result.contextTokens / contextLimit) * 100);
+        const ok = await doCompact(result.sessionId, result.contextTokens, `context at ${pct}% — compacting…`);
+        if (ok) {
+          await api.sendMessage(
+            chatId,
+            `📦 Context hit ${pct}% (${kfmt(result.contextTokens)}/${kfmt(contextLimit)}) — auto-compacted.`,
+          );
+        }
+      }
       return result.text;
     } catch (err) {
       if (err instanceof CancelledError) {

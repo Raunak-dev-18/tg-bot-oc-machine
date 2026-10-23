@@ -29,6 +29,8 @@ export interface BotConfig {
   sarvamTtsModel: string;
   sarvamSpeaker?: string;
   sarvamPace: number;
+  /** Auto-compact a session when context reaches this % of the model limit. */
+  compactAt: number;
 }
 
 function parseBoolean(raw: string | undefined, fallback: boolean): boolean {
@@ -102,5 +104,6 @@ export function loadConfig(): BotConfig {
     sarvamTtsModel: (process.env.SARVAM_TTS_MODEL ?? "bulbul:v4-flash").trim() || "bulbul:v4-flash",
     sarvamSpeaker: (process.env.SARVAM_VOICE ?? "").trim() || undefined,
     sarvamPace: Math.min(2, Math.max(0.5, Number(process.env.SARVAM_PACE ?? 1) || 1)),
+    compactAt: Math.min(100, Math.max(1, Number(process.env.OPENCODE_COMPACT_AT ?? 85) || 85)),
   };
 }

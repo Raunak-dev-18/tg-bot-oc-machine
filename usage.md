@@ -175,6 +175,11 @@ command names forbid hyphens; both spellings work in chat).
   speak placeholders.
 - **Provider errors surface loudly** — a dead/deprecated model (exit 0 + error event) is
   reported with the provider's own message instead of masquerading as an empty reply.
+- **Auto-compaction at 85%** — context usage is tracked every turn (final-step prompt tokens
+  vs the model's context limit, shown in the footer as `ctx 41k/200k (21%)`). When a run
+  crosses `OPENCODE_COMPACT_AT` (default 85%), the session is AI-summarized automatically and
+  you get a `📦 Context hit … — auto-compacted.` note. High-context sessions inherited from
+  before are compacted pre-emptively on their first message. Cooldown 2 min/session.
 - **Background** — `/bg <task>` runs with chat free (fresh session, same memory/skills).
   Max 3 per chat. Result lands here when done; `/stop` cancels.
 - **Restart-proof** — every started run is journaled (`/jobs` lists them). If the bot

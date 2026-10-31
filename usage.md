@@ -175,6 +175,10 @@ command names forbid hyphens; both spellings work in chat).
   speak placeholders.
 - **Provider errors surface loudly** — a dead/deprecated model (exit 0 + error event) is
   reported with the provider's own message instead of masquerading as an empty reply.
+- **Fail-fast wedged runs** — if zero events arrive within 3 min (provider quota burned,
+  backend stall, gateway wedge), the run is killed with a clear message instead of hanging
+  through 40 min of chained retries. Quota errors (`Free usage limit reached`) get a 🔓
+  hint about the free-tier reset and options.
 - **Auto-compaction at 85%** — context usage is tracked every turn (final-step prompt tokens
   vs the model's context limit, shown in the footer as `ctx 41k/200k (21%)`). When a run
   crosses `OPENCODE_COMPACT_AT` (default 85%), the session is AI-summarized automatically and

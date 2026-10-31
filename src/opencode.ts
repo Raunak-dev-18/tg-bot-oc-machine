@@ -216,14 +216,33 @@ export function runOpencode(opts: RunOpts): Promise<RunResult> {
     let eventCount = 0;
     let settled = false;
 
+    const failFast = (msg: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(noEventTimer);
+      child.kill("SIGKILL");
+      reject(new Error(msg));
+    };
+
     const timer = setTimeout(() => {
       if (!settled) {
         settled = true;
+        clearTimeout(noEventTimer);
         child.kill("SIGKILL");
         reject(new TimeoutError(texts.join("\n").trim(), sessionId, opts.timeoutMs));
       }
     }, opts.timeoutMs);
     timer.unref?.();
+
+    // Some failure modes (provider quota, dead backends, broken gateway) let the
+    // CLI sit silent for many minutes. A healthy run always emits step_start
+    // within seconds — so zero events for minutes means wedged: fail fast.
+    const NO_EVENT_MS = 180_000;
+    const noEventTimer = setTimeout(() => {
+      if (!settled && eventCount === 0) failFast("model produced no output for 180s (free-usage limit likely reached, or provider stalled)");
+    }, NO_EVENT_MS);
+    noEventTimer.unref?.();
 
     const handleLine = (line: string) => {
       const trimmed = line.trim();
@@ -314,7 +333,7 @@ export function runOpencode(opts: RunOpts): Promise<RunResult> {
           durationMs: Date.now() - startedAt,
         });
       } else {
-        const detail = text || stderrTail.trim() || `exit code ${code}`;
+        const detail = text || modelError || stderrTail.trim() || `exit code ${code}`;
         reject(new Error(`opencode failed (${eventCount} events): ${detail.slice(0, 1500)}`));
       }
     });

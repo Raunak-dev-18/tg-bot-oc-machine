@@ -815,10 +815,15 @@ async function main(): Promise<void> {
           /* chat may be gone; already logged */
         }
       } else {
-        console.error(`[opencode] chat ${chatId}: FAILED ${(err as Error).message.slice(0, 300)}`);
+        const raw = (err as Error).message;
+        const quotaHit = /free usage limit reached/i.test(raw);
+        const msg = quotaHit
+          ? `🔓 ${raw.slice(0, 300)}\n\n(opencode free quota is exhausted for this machine — tokens-in-flight reset later; /new + /model pick another provider or auth a paid key.)`
+          : raw;
+        console.error(`[opencode] chat ${chatId}: FAILED ${msg.slice(0, 300)}`);
         if (reactTo !== undefined) await api.react(chatId, reactTo, "👎");
         try {
-          await sendReply(chatId, `❌ ${(err as Error).message.slice(0, 3000)}`, replyTo);
+          await sendReply(chatId, `❌ ${msg.slice(0, 3000)}`, replyTo);
         } catch {
           /* chat may be gone; already logged */
         }

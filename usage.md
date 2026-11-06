@@ -129,6 +129,7 @@ command names forbid hyphens; both spellings work in chat).
 | `/free` | Numbered list of **free** models (`👁` = sees images, plus context sizes). Reply with the **number** to select |
 | `/models [provider]` | Numbered list of models (optionally filtered by provider). Reply with the **number** |
 | `/model <number\|provider/model>` | Switch model for this chat (applies from next message). Bare `/model` shows current |
+| `/add-llm <name> <baseUrl> <modelId> <apiKey>` | **Bring your own model**: connect any OpenAI-compatible endpoint as a provider. Then `/model <name>/<modelId>` and chat. `/add-llm` lists yours, `/add-llm remove <name>` drops it |
 | `/effort <minimal\|low\|medium\|high\|xhigh\|max>` | Reasoning effort for this chat (applies from next message). `/effort off` resets |
 | `/effort` | Show current effort + available levels for your model |
 | `/sessions` | Last 10 sessions by title (current marked). Reply with the **number** to jump |

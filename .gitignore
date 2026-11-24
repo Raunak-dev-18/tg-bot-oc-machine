@@ -5,3 +5,8 @@ dist/
 data/bot-state.json
 data/bot-state.json.tmp
 data/inbox/
+
+# runtime
+bot.log
+bot.log.*
+data/

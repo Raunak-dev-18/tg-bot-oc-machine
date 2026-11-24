@@ -37,9 +37,16 @@ npm run dev      # build + start (foreground, logs to stdout)
 npm run build && npm start
 ```
 
-On boot the bot logs in (`logged in as @…`), ensures a background
-`opencode serve` is healthy on `OPENCODE_SERVE_PORT` (default 4096), writes its
-isolated opencode config (browser MCP) and starts polling Telegram.
+On boot the bot logs in (`logged in as @…`), writes its isolated opencode config
+(browser MCP) and starts polling Telegram. By default it runs opencode **directly
+per message** (`OPENCODE_AUTO_SERVE=false`). Background `opencode serve`
+(`OPENCODE_SERVE_PORT`, default 4096) is opt-in — see the note below.
+
+> ⚠️ **Keep `OPENCODE_AUTO_SERVE=false`.** On opencode 1.19.x
+> `opencode run --attach <url>` returns only a `step_start` event and no text, so the
+> bot fails with "empty reply twice". Direct runs work reliably. Only set it to
+> `true` after verifying `opencode run --attach http://127.0.0.1:4096 "hi"` streams
+> a reply on your build.
 
 > ⚠️ **Security.** With `OPENCODE_AUTO_APPROVE=true` (default) and an empty
 > `TELEGRAM_ALLOWED_USERS`, **anyone who finds the bot gets full shell access
@@ -281,7 +288,7 @@ mouse/keyboard control of GUI apps is out of scope — browser + shell cover it.
 | `OPENCODE_AGENT` | `build` | opencode agent |
 | `OPENCODE_AUTO_APPROVE` | `true` | `--auto`: act without confirmation |
 | `OPENCODE_TIMEOUT_MS` | `600000` | Per-message timeout |
-| `OPENCODE_AUTO_SERVE` | `true` | Auto-manage background `opencode serve` |
+| `OPENCODE_AUTO_SERVE` | `false` | Auto-manage background `opencode serve`. Keep `false` on opencode 1.19.x (broken `--attach` → empty replies) |
 | `OPENCODE_SERVE_PORT` | `4096` | Serve port |
 | `OPENCODE_SERVER_URL` | auto | Use an externally managed server instead |
 | `TELEGRAM_POLL_TIMEOUT` | `50` | Long-poll seconds |
@@ -303,6 +310,8 @@ mouse/keyboard control of GUI apps is out of scope — browser + shell cover it.
   effort variants, 6 h cache), `opencode session list`, and `opencode export` for
   `/recall` cross-session search.
 - `src/serve.ts` — keeps background `opencode serve` healthy (`/global/health`).
+  Opt-in only (`OPENCODE_AUTO_SERVE=false` by default) because opencode 1.19.x
+  `run --attach` returns empty replies, so the bot prefers direct per-message runs.
 - `src/botconfig.ts` — generates the isolated opencode home with the Playwright MCP.
 - `src/store.ts` — per-chat session/model/selections + polling offset + cron jobs
   (`data/bot-state.json`, atomic writes).

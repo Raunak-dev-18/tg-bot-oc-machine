@@ -24,7 +24,7 @@ Full instructions: **[usage.md](./usage.md)** · Setup & operations: **[AGENTS.m
 - 🛠️ **Skills** — drop-in `SKILL.md` guides (`/skills`); **recall** past sessions (`/recall`); **parallel** runs (`/parallel a ;; b`)
 - 📤 **Direct sends** — `/send <path>` pushes any machine file to chat instantly
 - 🔧 **Direct shell** — `/exec <command>` runs without AI; `/agent`, `/status`, `/new`, `/reset`, `/stop` (cancel running task)
-- 🖥️ **Background server** — auto-starts and reuses `opencode serve` (`--attach` mode)
+- 🖥️ **Background server (opt-in)** — can auto-start and reuse `opencode serve` (`--attach` mode). **Off by default**: on opencode 1.19.x `--attach` returns empty replies, so the bot runs opencode directly per message unless you set `OPENCODE_AUTO_SERVE=true`
 
 ## Quickstart
 
@@ -60,7 +60,7 @@ Keep it alive free: `setsid ./run.sh >>bot.log 2>&1 < /dev/null &`
 | `OPENCODE_AGENT` | `build` | opencode agent |
 | `OPENCODE_AUTO_APPROVE` | `true` | Pass `--auto` so the agent acts without confirmation |
 | `OPENCODE_TIMEOUT_MS` | `600000` | Per-message opencode timeout |
-| `OPENCODE_AUTO_SERVE` | `true` | Auto-manage background `opencode serve` |
+| `OPENCODE_AUTO_SERVE` | `false` | Auto-manage background `opencode serve`. Keep `false` on opencode 1.19.x (broken `--attach` → empty replies); enable only if your version supports it |
 | `OPENCODE_SERVE_PORT` | `4096` | Serve port |
 | `OPENCODE_SERVER_URL` | auto | Point at an externally managed server instead |
 | `TELEGRAM_POLL_TIMEOUT` | `50` | Long-poll seconds |
@@ -78,6 +78,11 @@ Keep it alive free: `setsid ./run.sh >>bot.log 2>&1 < /dev/null &`
 Two opencode CLI quirks handled in code: the message positional must precede
 `--file` flags (yargs array greediness), and in `--attach` mode `-f` content is
 dropped — so the absolute file path is always embedded in the prompt text.
+
+> ⚠️ **Known issue (opencode 1.19.x):** `opencode run --attach` emits only a
+> `step_start` event and never `text`/`step_finish`, so the bot gets an "empty
+> reply twice" failure. Run in direct mode (`OPENCODE_AUTO_SERVE=false`, the
+> default) unless you've verified `--attach` works on your opencode build.
 
 ## ⚠️ Security
 

@@ -95,7 +95,7 @@ export function loadConfig(): BotConfig {
     autoApprove: parseBoolean(process.env.OPENCODE_AUTO_APPROVE, true),
     timeoutMs: Number(process.env.OPENCODE_TIMEOUT_MS ?? 600_000) || 600_000,
     serverUrl: serverUrlRaw || undefined,
-    autoServe: parseBoolean(process.env.OPENCODE_AUTO_SERVE, true),
+    autoServe: parseBoolean(process.env.OPENCODE_AUTO_SERVE, false),
     servePort: Number(process.env.OPENCODE_SERVE_PORT ?? 4096) || 4096,
     pollTimeoutSec: Number(process.env.TELEGRAM_POLL_TIMEOUT ?? 50) || 50,
     healthPort: parseHealthPort(),

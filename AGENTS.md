@@ -54,9 +54,17 @@ npm run dev    # build + run in foreground (logs to stdout)
 # or: npm run build && npm start
 ```
 
-Expected boot log order: `skills:` → `opencode config home:` → `whitelist:` →
-`logged in as @…` → `opencode server healthy` → `polling for updates…`.
-Then send `/start` to your bot on Telegram.
+Expected boot log order (direct mode, the default): `skills:` →
+`opencode config home:` → `whitelist:` → `logged in as @…` →
+`polling for updates…`. Then send `/start` to your bot on Telegram.
+
+> ⚠️ **Keep `OPENCODE_AUTO_SERVE=false` (default).** On opencode 1.19.x
+> `opencode run --attach <url>` returns only a `step_start` event with no text, so
+> the bot reports "empty reply twice" and fails. Direct per-message runs work.
+> If you enable serve (`OPENCODE_AUTO_SERVE=true`), first verify with
+> `opencode run --attach http://127.0.0.1:4096 "hi"` that text actually streams
+> back; the boot log will then include `opencode server healthy` and
+> `opencode runs will --attach …`.
 
 ## 4. Keep it running
 
@@ -86,10 +94,11 @@ WantedBy=multi-user.target
 
 Notes:
 
-- The bot auto-manages background `opencode serve` (`OPENCODE_AUTO_SERVE=true`,
-  port `OPENCODE_SERVE_PORT`, default 4096) and **self-heals**: if the server dies,
-  your next message restarts it. Only one bot instance per token (Telegram allows a
-  single `getUpdates` consumer — duplicates cause double replies).
+- Background serve is **opt-in** and off by default (`OPENCODE_AUTO_SERVE=false`)
+  because opencode 1.19.x `--attach` yields empty replies. When enabled it manages
+  `opencode serve` (port `OPENCODE_SERVE_PORT`, default 4096) and self-heals. Only
+  one bot instance per token (Telegram allows a single `getUpdates` consumer —
+  duplicates cause double replies).
 - State lives in `DATA_DIR` (default `./data`): `bot-state.json` (sessions, crons),
   `memory/` (MEMORY.md + daily notes), `inbox/`/`outbox/` (media),
   `.opencode-home/` (isolated opencode config with the browser MCP). Back up `data/`
@@ -108,7 +117,7 @@ Notes:
 | `OPENCODE_AGENT` | `build` | Per-chat `/agent` overrides |
 | `OPENCODE_AUTO_APPROVE` | `true` | `--auto`. `false` = safer, but headless runs may stall |
 | `OPENCODE_TIMEOUT_MS` | `600000` | Per-message cap |
-| `OPENCODE_AUTO_SERVE` / `OPENCODE_SERVE_PORT` | `true` / `4096` | Background server management |
+| `OPENCODE_AUTO_SERVE` / `OPENCODE_SERVE_PORT` | `false` / `4096` | Background server (opt-in). Keep `false` on opencode 1.19.x — broken `--attach` → empty replies |
 | `OPENCODE_SERVER_URL` | auto | Use an externally managed server instead |
 | `CHROMIUM_PATH` | `/repl/tools/bin/chromium` | Headless browser binary |
 | `SKILLS_DIR` | auto-detected `./skills` | Drop-in `SKILL.md` guides |
@@ -134,6 +143,7 @@ reply number, `/memory` + `/remember`, `/shot <url>`, `/send <path>`,
 |---|---|
 | `Missing TELEGRAM_BOT_TOKEN` at boot | Export it or fill `.env` |
 | `⛔ Unauthorized` for yourself | `TELEGRAM_ALLOWED_USERS` must contain your exact ID or `@username` |
+| Replies fail with "empty reply twice" | opencode 1.19.x `--attach` bug — set `OPENCODE_AUTO_SERVE=false` (the default) and restart |
 | Replies say opencode failed | Run `opencode run "hi"` manually; check port free; `/status` for server health |
 | Browser tools missing (`/status`) | `npm install` (needs `@playwright/mcp`) + valid `CHROMIUM_PATH`, then restart |
 | Images not understood | Switch to a 👁 model via `/free` |
@@ -154,6 +164,7 @@ npm run build      # esbuild → dist/index.mjs
   `memory.ts`, `cron.ts`, `skills.ts`, `index.ts` (loop + routing).
 - Gotchas baked in: message positional must precede `--file` flags; `-f` content is
   dropped in `--attach` mode (absolute paths go in prompt text); `✅`/`❌` are invalid
-  Telegram reactions; detached `serve` processes may be reaped — the bot self-heals.
+  Telegram reactions; detached `serve` processes may be reaped — the bot self-heals;
+  `--attach` is broken on opencode 1.19.x (empty replies), hence serve defaults off.
 - PRs welcome: keep zero runtime deps (except `@playwright/mcp`), update `usage.md`
   for user-facing changes.

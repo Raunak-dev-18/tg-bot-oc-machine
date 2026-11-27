@@ -12,6 +12,7 @@ Full instructions: **[usage.md](./usage.md)** · Setup & operations: **[AGENTS.m
 ## Features
 
 - 💬 **Chat → opencode → chat** with per-chat persistent sessions (memory across messages)
+- 🌊 **Live AI streaming** — partial replies stream into private chats via Telegram's native `sendMessageDraft` (animated "Thinking…" → growing text → final message); falls back to status-message edits
 - ❓ **Agent questions as buttons** — the agent emits `:::ASK` blocks, you tap inline-keyboard options, your answer flows back into the same session
 - 📷📎 **Photos & documents both ways** — uploads go to the agent; agent files (screenshots, reports) come back via outbox + `:::SEND` blocks
 - 🧠 **Persistent memory** — `MEMORY.md` + daily notes, agent-maintained (`/memory`, `/remember`)
@@ -64,10 +65,11 @@ Keep it alive free: `setsid ./run.sh >>bot.log 2>&1 < /dev/null &`
 | `OPENCODE_SERVE_PORT` | `4096` | Serve port |
 | `OPENCODE_SERVER_URL` | auto | Point at an externally managed server instead |
 | `TELEGRAM_POLL_TIMEOUT` | `50` | Long-poll seconds |
+| `TELEGRAM_STREAM_DRAFTS` | `true` | Stream partial replies in private chats via native `sendMessageDraft` (animated). `false` = status-message edits |
 
 ## How it works
 
-- `src/telegram.ts` — zero-dep Bot API client (long polling, chunked sends, inline keyboards, file download)
+- `src/telegram.ts` — zero-dep Bot API client (long polling, chunked sends, inline keyboards, file download, native `sendMessageDraft` streaming)
 - `src/opencode.ts` — spawns `opencode run --format json`, parses JSONL events into reply text, tracks session/tokens/cost
 - `src/interact.ts` — `:::ASK` block parser + pending-answer registry for button taps
 - `src/models.ts` — parses `opencode models --verbose` (free = zero cost, vision flags) and `opencode session list`

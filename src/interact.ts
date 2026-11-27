@@ -196,6 +196,21 @@ export function parseReactLine(text: string): { emoji?: string; cleaned: string 
   return { cleaned: text };
 }
 
+/**
+ * Clean a partially-streamed reply for live display (draft/edit previews).
+ * Strips thinking tags, protocol blocks (complete OR still open), and the
+ * trailing REACT line so internal markup never flashes in the chat.
+ */
+export function streamPreview(text: string): string {
+  let s = text;
+  // Drop an in-progress :::ASK / :::SEND block from its opener to the end.
+  s = s.replace(/:::ASK[\s\S]*$/i, "").replace(/:::SEND[\s\S]*$/i, "");
+  s = parseThinkBlocks(s).cleaned;
+  s = stripAskBlocks(stripSendBlocks(s));
+  s = parseReactLine(s).cleaned;
+  return s.trim();
+}
+
 export interface PendingAnswer {
   chatId: number;
   sessionId?: string;

@@ -161,6 +161,31 @@ export class TgApi {
     );
   }
 
+  /**
+   * Stream a partial AI reply into a PRIVATE chat (Bot API 9.5+).
+   * The draft is ephemeral: reuse the same non-zero `draftId` so successive
+   * updates animate in place, and call sendMessage() with the final text to
+   * persist it. Pass empty text to show a "Thinking…" placeholder.
+   * Returns false (never throws) on unsupported/older servers or rate limits
+   * so the caller can fall back to editing a normal message.
+   */
+  async sendMessageDraft(chatId: number, draftId: number, text: string, opts?: { canStop?: boolean; keepOnStop?: boolean }): Promise<boolean> {
+    try {
+      const payload: Record<string, unknown> = {
+        chat_id: chatId,
+        draft_id: draftId,
+        text,
+        disable_web_page_preview: true,
+      };
+      if (opts?.canStop !== undefined) payload.can_stop = opts.canStop;
+      if (opts?.keepOnStop !== undefined) payload.keep_on_stop = opts.keepOnStop;
+      await this.call<boolean>("sendMessageDraft", payload, 10_000);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async sendChatAction(chatId: number, action = "typing"): Promise<void> {
     try {
       await this.call("sendChatAction", { chat_id: chatId, action }, 10_000);

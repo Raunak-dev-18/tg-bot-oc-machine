@@ -122,6 +122,7 @@ Notes:
 | `CHROMIUM_PATH` | `/repl/tools/bin/chromium` | Headless browser binary |
 | `SKILLS_DIR` | auto-detected `./skills` | Drop-in `SKILL.md` guides |
 | `TELEGRAM_POLL_TIMEOUT` | `50` | Long-poll seconds |
+| `TELEGRAM_STREAM_DRAFTS` | `true` | Stream partial replies in private chats via native `sendMessageDraft` (Bot API 9.5+). Groups always use status edits |
 
 ## 6. Operate (what to tell the user)
 
@@ -132,6 +133,10 @@ reply number, `/memory` + `/remember`, `/shot <url>`, `/send <path>`,
 `/cron every 30m …` + `/crons` + `/uncron`, `/recall`, `/parallel a ;; b`,
 `/exec` (raw shell), `/stop` (cancel). Full reference: [usage.md](./usage.md).
 
+- Streaming: in private chats replies stream live via Telegram's native
+  `sendMessageDraft` (ephemeral animated bubble, then a final `sendMessage`).
+  If the Bot API build predates 9.5 or the call fails, it auto-falls back to
+  editing a status message. Disable with `TELEGRAM_STREAM_DRAFTS=false`.
 - Vision needs a 👁 model from `/free`; the bot warns when the current one can't see.
 - Media ≤20 MB each way (Telegram limit). Outbox auto-sends (max 5/run).
 - Skills: add `skills/<name>/SKILL.md` (`name:` + `description:` frontmatter) and restart.

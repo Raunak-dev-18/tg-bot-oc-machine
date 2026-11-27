@@ -91,14 +91,20 @@ Requires `SARVAM_API_KEY` where the bot runs (dashboard.sarvam.ai). Then:
   3500 chars/call, paced/naturalized for pronunciation.
 
 Replies are chunked to Telegram's limits automatically and end with a
-`— done in Xs · tokens …` footer. While it works you'll see the typing indicator
-plus a live bubble: `⏳ Working…` with elapsed time and current activity, which turns
-into a **streaming preview** — the answer text appears live (with a `▍` cursor) as the
-agent produces it, edited at a flood-safe cadence. (Telegram has no true streaming API;
-message edits are the standard approximation — and opencode emits answer text per
-completed step, so long agentic runs stream part-by-part while short answers arrive whole.)
-The bubble is deleted when the final chunked reply lands. Your message gets 👀 on pickup,
-the agent's own emotional `REACT:` emoji (or 👍) when done, 👎 on failure.
+`— done in Xs · tokens …` footer. While it works you'll see the typing indicator and
+a **live streaming preview** — the answer text appears as the agent produces it.
+
+- **Private chats (default):** native Telegram AI streaming via `sendMessageDraft`
+  (Bot API 9.5+). A single ephemeral bubble shows `Thinking…`, then animates as the
+  text grows (with a `▍` cursor), and is replaced by the final persisted message. Draft
+  updates are throttled to ~1/s to respect flood limits.
+- **Fallback / groups:** if the draft API is unavailable (older server) or disabled with
+  `TELEGRAM_STREAM_DRAFTS=false`, the bot edits a normal `⏳ Working…` status message and
+  deletes it when the final reply lands.
+
+opencode emits answer text per completed step, so long agentic runs stream part-by-part
+while short answers arrive whole. Your message gets 👀 on pickup, the agent's own
+emotional `REACT:` emoji (or 👍) when done, 👎 on failure.
 
 Replies render with Telegram-native formatting (`<b> <i> <code> <pre>`, links) with
 automatic plain-text fallback. Model thinking never leaks raw: `<think>` blocks go to a
@@ -292,6 +298,7 @@ mouse/keyboard control of GUI apps is out of scope — browser + shell cover it.
 | `OPENCODE_SERVE_PORT` | `4096` | Serve port |
 | `OPENCODE_SERVER_URL` | auto | Use an externally managed server instead |
 | `TELEGRAM_POLL_TIMEOUT` | `50` | Long-poll seconds |
+| `TELEGRAM_STREAM_DRAFTS` | `true` | Stream partial replies in private chats via native `sendMessageDraft`; `false` = status-message edits |
 | `HEALTH_PORT` | `5001` | HTTP health endpoint (`/` and `/healthz`, `0` = disabled; Replit injects `PORT`) |
 
 ---

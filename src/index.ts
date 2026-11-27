@@ -11,7 +11,7 @@ import { ensureBotConfigHome } from "./botconfig.js";
 import { sessionContextTokens, splitModelId, summarizeSession } from "./compact.js";
 import { computeNext, describeSpec, formatNext, parseSpec } from "./cron.js";
 import { loadConfig } from "./config.js";
-import { PendingQuestions, parseAskBlocks, parseReactLine, parseSendBlocks, parseThinkBlocks, splitUnmarkedThinking, stripAskBlocks, stripSendBlocks } from "./interact.js";
+import { PendingQuestions, parseAskBlocks, parseReactLine, parseSendBlocks, parseThinkBlocks, splitUnmarkedThinking, streamPreview, stripAskBlocks, stripSendBlocks } from "./interact.js";
 import { loadMemoryContext, memoryPaths, readMemoryFile, rememberFact } from "./memory.js";
 import { getVerboseModels, listPlainModels, listSessions, lookupModel, recallSessions, findLatestSession } from "./models.js";
 import { loadSkills, skillsCatalog } from "./skills.js";
@@ -429,11 +429,17 @@ async function main(): Promise<void> {
     await sendReply(chatId, text, replyTo);
   }
 
-  /** Live "still working" status bubble, edited as the run progresses.
-   * Doubles as the streaming surface: once answer text flows, the bubble
-   * shows it live (Telegram has no true streaming API — message edits at a
-   * safe cadence are the standard approximation). */
+  /** Live "still working" + streaming surface.
+   * In private chats it prefers Telegram's native AI streaming API
+   * (`sendMessageDraft`): a single ephemeral bubble that animates as the answer
+   * is generated and is replaced by the final persisted message. If that API is
+   * unavailable it falls back to editing a normal status message. */
   function makeStatus(chatId: number, replyTo: number | undefined) {
+    const useDrafts = config.streamDrafts && chatId > 0;
+    // Non-zero, stable for this run: same id => Telegram animates in place.
+    const draftId = 1 + Math.floor(Math.random() * 2_000_000_000);
+    let draftOk = false;
+    let lastDraftAt = 0;
     let id: number | undefined;
     let lastBubble = "";
     let lastEditAt = 0;
@@ -453,14 +459,25 @@ async function main(): Promise<void> {
         return false;
       }
     }
+    async function draft(text: string): Promise<boolean> {
+      if (!draftOk) return false;
+      const ok = await api.sendMessageDraft(chatId, draftId, text.slice(0, 4000));
+      if (!ok) draftOk = false;
+      return ok;
+    }
     return {
       note(text: string) {
         activity = text.slice(0, 120);
       },
       stream(text: string) {
-        streamed = text;
+        streamed = streamPreview(text);
       },
       async start() {
+        if (useDrafts) {
+          // Empty text renders a native "Thinking…" placeholder.
+          draftOk = await api.sendMessageDraft(chatId, draftId, "");
+          if (draftOk) return;
+        }
         try {
           id = (await api.sendMessage(chatId, "⏳ Working on it…", replyTo)).message_id;
           lastBubble = "⏳ Working on it…";
@@ -469,8 +486,27 @@ async function main(): Promise<void> {
         }
       },
       async tick(startedAt: number) {
-        if (id === undefined) return;
         const now = Date.now();
+        if (draftOk) {
+          // Drafts count against the ~1 msg/s per-chat limit — throttle them.
+          if (now - lastDraftAt < 1200) return;
+          lastDraftAt = now;
+          if (streamed) {
+            await draft(streamed + " ▍");
+          } else {
+            const elapsed = Math.round((now - startedAt) / 1000);
+            await draft(`⏳ ${activity}${elapsed >= 20 ? ` · ${fmt(elapsed)}` : ""}`);
+          }
+          if (draftOk) return;
+          // Draft API just failed — fall through to the edit-based surface.
+          try {
+            id = (await api.sendMessage(chatId, "⏳ Working on it…", replyTo)).message_id;
+            lastBubble = "⏳ Working on it…";
+          } catch {
+            id = undefined;
+          }
+        }
+        if (id === undefined) return;
         if (streamed) {
           if (now - lastStreamEditAt < 1500) return;
           lastStreamEditAt = now;
@@ -489,6 +525,8 @@ async function main(): Promise<void> {
           id = undefined;
           await api.deleteMessage(chatId, target);
         }
+        // The ephemeral draft clears automatically once the final sendMessage
+        // lands (or expires on its own); nothing to delete here.
       },
     };
   }
